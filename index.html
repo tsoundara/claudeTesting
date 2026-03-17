@@ -49,7 +49,7 @@
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
   </div>
-  <div id="hint">Drag to orbit &nbsp;|&nbsp; Click ↻↺ on a face to rotate that layer</div>
+  <div id="hint">Drag to orbit &nbsp;|&nbsp; Right / Top / Left faces: ◀▶ arrows rotate every layer</div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script>
   (function () {
@@ -141,39 +141,41 @@
       ctx.arc(64, 64, 58, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.font = 'bold 76px sans-serif';
+      ctx.font = 'bold 80px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(symbol, 64, 70);
       return new THREE.CanvasTexture(c);
     }
 
-    // CW (↻) / CCW (↺) directions from the viewer's perspective per face
-    // Right-hand rule: positive rotation around +axis is CCW when viewed from +axis side.
-    // So CW from +side = dir=-1; CW from -side = dir=+1.
+    // ◀ = dir:-1, ▶ = dir:+1 uniformly across all axes.
+    // Each axis uses a dedicated face so all 9 layers (incl. middle) have arrows.
     const ARROW_DEFS = [
-      // Top face (+Y, white)
-      { pos: [-.5,  1.55,  0 ], rot: [ Math.PI/2, 0, 0         ], move: { axis:'y', layer: 1, dir:-1 }, sym:'↻' },
-      { pos: [ .5,  1.55,  0 ], rot: [ Math.PI/2, 0, 0         ], move: { axis:'y', layer: 1, dir: 1 }, sym:'↺' },
-      // Bottom face (-Y, yellow)
-      { pos: [-.5, -1.55,  0 ], rot: [-Math.PI/2, 0, 0         ], move: { axis:'y', layer:-1, dir: 1 }, sym:'↻' },
-      { pos: [ .5, -1.55,  0 ], rot: [-Math.PI/2, 0, 0         ], move: { axis:'y', layer:-1, dir:-1 }, sym:'↺' },
-      // Front face (+Z, red)
-      { pos: [-.5,  0,  1.55 ], rot: [ 0, 0, 0                 ], move: { axis:'z', layer: 1, dir:-1 }, sym:'↻' },
-      { pos: [ .5,  0,  1.55 ], rot: [ 0, 0, 0                 ], move: { axis:'z', layer: 1, dir: 1 }, sym:'↺' },
-      // Back face (-Z, orange)
-      { pos: [ .5,  0, -1.55 ], rot: [ 0, Math.PI, 0           ], move: { axis:'z', layer:-1, dir: 1 }, sym:'↻' },
-      { pos: [-.5,  0, -1.55 ], rot: [ 0, Math.PI, 0           ], move: { axis:'z', layer:-1, dir:-1 }, sym:'↺' },
-      // Right face (+X, blue)
-      { pos: [ 1.55,  0, -.5 ], rot: [ 0,  Math.PI/2, 0        ], move: { axis:'x', layer: 1, dir:-1 }, sym:'↻' },
-      { pos: [ 1.55,  0,  .5 ], rot: [ 0,  Math.PI/2, 0        ], move: { axis:'x', layer: 1, dir: 1 }, sym:'↺' },
-      // Left face (-X, green)
-      { pos: [-1.55,  0,  .5 ], rot: [ 0, -Math.PI/2, 0        ], move: { axis:'x', layer:-1, dir: 1 }, sym:'↻' },
-      { pos: [-1.55,  0, -.5 ], rot: [ 0, -Math.PI/2, 0        ], move: { axis:'x', layer:-1, dir:-1 }, sym:'↺' },
+      // ── Y-axis layers on RIGHT (+X) face — 3 rows at y=-1,0,1 ─────────────
+      { pos:[ 1.55,  1, -0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 1, dir:-1}, sym:'◀' },
+      { pos:[ 1.55,  1,  0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 1, dir: 1}, sym:'▶' },
+      { pos:[ 1.55,  0, -0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 0, dir:-1}, sym:'◀' },
+      { pos:[ 1.55,  0,  0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 0, dir: 1}, sym:'▶' },
+      { pos:[ 1.55, -1, -0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer:-1, dir:-1}, sym:'◀' },
+      { pos:[ 1.55, -1,  0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer:-1, dir: 1}, sym:'▶' },
+      // ── X-axis layers on TOP (+Y) face — 3 columns at x=-1,0,1 ────────────
+      { pos:[ 1, 1.55, -0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 1, dir:-1}, sym:'◀' },
+      { pos:[ 1, 1.55,  0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 1, dir: 1}, sym:'▶' },
+      { pos:[ 0, 1.55, -0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 0, dir:-1}, sym:'◀' },
+      { pos:[ 0, 1.55,  0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 0, dir: 1}, sym:'▶' },
+      { pos:[-1, 1.55, -0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer:-1, dir:-1}, sym:'◀' },
+      { pos:[-1, 1.55,  0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer:-1, dir: 1}, sym:'▶' },
+      // ── Z-axis layers on LEFT (-X) face — 3 depths at z=-1,0,1 ────────────
+      { pos:[-1.55, -0.35,  1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 1, dir:-1}, sym:'◀' },
+      { pos:[-1.55,  0.35,  1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 1, dir: 1}, sym:'▶' },
+      { pos:[-1.55, -0.35,  0], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 0, dir:-1}, sym:'◀' },
+      { pos:[-1.55,  0.35,  0], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 0, dir: 1}, sym:'▶' },
+      { pos:[-1.55, -0.35, -1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer:-1, dir:-1}, sym:'◀' },
+      { pos:[-1.55,  0.35, -1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer:-1, dir: 1}, sym:'▶' },
     ];
 
     (function createArrows() {
-      const geo = new THREE.PlaneGeometry(0.62, 0.62);
+      const geo = new THREE.PlaneGeometry(0.52, 0.52);
       ARROW_DEFS.forEach(def => {
         const mat = new THREE.MeshBasicMaterial({
           map: makeArrowTexture(def.sym),
