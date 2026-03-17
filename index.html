@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Rubik's Cube</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; overflow: hidden; font-family: sans-serif; }
+    canvas { display: block; touch-action: none; }
+    #ui {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    button {
+      padding: 12px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+      letter-spacing: 0.5px;
+    }
+    #scrambleBtn {
+      background: #e67e22;
+      color: #fff;
+    }
+    #scrambleBtn:hover:not(:disabled) { background: #f39c12; }
+    #solveBtn {
+      background: #27ae60;
+      color: #fff;
+    }
+    #solveBtn:hover:not(:disabled) { background: #2ecc71; }
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    #hint {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: #666;
+      font-size: 13px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <button id="scrambleBtn">Scramble</button>
+    <button id="solveBtn">Solve</button>
+  </div>
+  <div id="hint">Click & drag to rotate</div>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script>
+  (function () {
+    // ── CONSTANTS ──────────────────────────────────────────────────────────────
+    const COLORS = {
+      WHITE:  0xffffff,
+      YELLOW: 0xffdd00,
+      RED:    0xee1111,
+      ORANGE: 0xff8800,
+      BLUE:   0x1155ee,
+      GREEN:  0x22aa22,
+      BLACK:  0x111111,
+    };
+    const ANIM_SPEED_SCRAMBLE = 0.08;
+    const ANIM_SPEED_SOLVE    = 0.05;
+    const CUBIE_SIZE  = 0.92;
+    const CUBIE_GAP   = 1.0;
+    const SCRAMBLE_MOVES = 20;
+
+    // ── THREE.JS SETUP ─────────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(4, 4, 7);
+    camera.lookAt(0, 0, 0);
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+
+    // cubeGroup holds all 27 cubies; we orbit this group
+    const cubeGroup = new THREE.Group();
+    scene.add(cubeGroup);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ── CUBE CONSTRUCTION ──────────────────────────────────────────────────────
+    const cubies = []; // { mesh }
+
+    function makeMaterials(ix, iy, iz) {
+      // BoxGeometry face order: +X, -X, +Y, -Y, +Z, -Z
+      return [
+        new THREE.MeshLambertMaterial({ color: ix ===  1 ? COLORS.BLUE   : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: ix === -1 ? COLORS.GREEN  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: iy ===  1 ? COLORS.WHITE  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: iy === -1 ? COLORS.YELLOW : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: iz ===  1 ? COLORS.RED    : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: iz === -1 ? COLORS.ORANGE : COLORS.BLACK }),
+      ];
+    }
+
+    function createCubies() {
+      const geo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
+      for (let ix = -1; ix <= 1; ix++) {
+        for (let iy = -1; iy <= 1; iy++) {
+          for (let iz = -1; iz <= 1; iz++) {
+            const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz));
+            mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
+            cubeGroup.add(mesh);
+            cubies.push({ mesh });
+          }
+        }
+      }
+    }
+    createCubies();
+
+    // ── MOVE ENGINE ────────────────────────────────────────────────────────────
+    const moveHistory = [];
+    const moveQueue   = [];
+    let   currentAnim = null;
+    let   animSpeed   = ANIM_SPEED_SCRAMBLE;
+
+    function getCubiesInLayer(axis, layer) {
+      const pos = new THREE.Vector3();
+      return cubies.filter(c => {
+        c.mesh.getWorldPosition(pos);
+        return Math.round(pos[axis]) === layer;
+      });
+    }
+
+    function easeInOut(t) {
+      return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    }
+
+    function startMoveAnimation(move) {
+      const { axis, layer, dir } = move;
+      const layerCubies = getCubiesInLayer(axis, layer);
+
+      const pivot = new THREE.Group();
+      scene.add(pivot);
+      layerCubies.forEach(c => pivot.attach(c.mesh));
+
+      const startQuat = pivot.quaternion.clone();
+      const endQuat   = new THREE.Quaternion();
+      const axisVec   = new THREE.Vector3(
+        axis === 'x' ? 1 : 0,
+        axis === 'y' ? 1 : 0,
+        axis === 'z' ? 1 : 0,
+      );
+      endQuat.setFromAxisAngle(axisVec, dir * Math.PI / 2);
+
+      currentAnim = { pivot, startQuat, endQuat, progress: 0, cubies: layerCubies };
+    }
+
+    function finalizeMove() {
+      const { pivot, cubies: layerCubies } = currentAnim;
+      // Set exact final rotation before re-parenting to avoid float drift
+      pivot.quaternion.copy(currentAnim.endQuat);
+      pivot.updateMatrixWorld();
+
+      layerCubies.forEach(c => {
+        scene.attach(c.mesh);
+        // Snap position to integer grid to prevent cumulative float drift
+        const p = c.mesh.position;
+        p.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
+      });
+      scene.remove(pivot);
+      currentAnim = null;
+    }
+
+    function processQueue() {
+      if (currentAnim || moveQueue.length === 0) return;
+      const move = moveQueue.shift();
+      startMoveAnimation(move);
+      updateButtons();
+    }
+
+    function enqueueMove(move, recordHistory) {
+      moveQueue.push(move);
+      if (recordHistory) moveHistory.push(move);
+    }
+
+    // ── SCRAMBLE / SOLVE ───────────────────────────────────────────────────────
+    const AXES   = ['x', 'y', 'z'];
+    const LAYERS = [-1, 0, 1];
+
+    function scramble(n) {
+      animSpeed = ANIM_SPEED_SCRAMBLE;
+      for (let i = 0; i < n; i++) {
+        enqueueMove({
+          axis:  AXES[Math.floor(Math.random() * 3)],
+          layer: LAYERS[Math.floor(Math.random() * 3)],
+          dir:   Math.random() < 0.5 ? 1 : -1,
+        }, true);
+      }
+      updateButtons();
+    }
+
+    function solve() {
+      if (moveHistory.length === 0) return;
+      animSpeed = ANIM_SPEED_SOLVE;
+      const solveMoves = moveHistory.slice().reverse().map(m => ({
+        axis: m.axis, layer: m.layer, dir: -m.dir,
+      }));
+      moveHistory.length = 0;
+      solveMoves.forEach(m => enqueueMove(m, false));
+      updateButtons();
+    }
+
+    // ── ORBIT (mouse/touch drag) ───────────────────────────────────────────────
+    let isDragging = false;
+    let prevPointer = { x: 0, y: 0 };
+    const ROT_SPEED = 0.005;
+
+    renderer.domElement.addEventListener('pointerdown', e => {
+      isDragging = true;
+      prevPointer = { x: e.clientX, y: e.clientY };
+    });
+
+    renderer.domElement.addEventListener('pointermove', e => {
+      if (!isDragging) return;
+      const dx = e.clientX - prevPointer.x;
+      const dy = e.clientY - prevPointer.y;
+      cubeGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dx * ROT_SPEED);
+      cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
+      prevPointer = { x: e.clientX, y: e.clientY };
+    });
+
+    renderer.domElement.addEventListener('pointerup',   () => { isDragging = false; });
+    renderer.domElement.addEventListener('pointerleave', () => { isDragging = false; });
+
+    // ── UI ─────────────────────────────────────────────────────────────────────
+    const scrambleBtn = document.getElementById('scrambleBtn');
+    const solveBtn    = document.getElementById('solveBtn');
+
+    function updateButtons() {
+      const busy = currentAnim !== null || moveQueue.length > 0;
+      scrambleBtn.disabled = busy;
+      solveBtn.disabled    = busy || moveHistory.length === 0;
+    }
+
+    scrambleBtn.addEventListener('click', () => scramble(SCRAMBLE_MOVES));
+    solveBtn.addEventListener('click', solve);
+    updateButtons();
+
+    // ── MAIN LOOP ──────────────────────────────────────────────────────────────
+    function tick() {
+      requestAnimationFrame(tick);
+
+      if (currentAnim) {
+        currentAnim.progress += animSpeed;
+        const t = easeInOut(Math.min(currentAnim.progress, 1.0));
+        THREE.Quaternion.slerp(
+          currentAnim.startQuat,
+          currentAnim.endQuat,
+          currentAnim.pivot.quaternion,
+          t,
+        );
+
+        if (currentAnim.progress >= 1.0) {
+          finalizeMove();
+          updateButtons();
+          processQueue();
+        }
+      } else {
+        processQueue();
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    tick();
+  })();
+  </script>
+</body>
+</html>
