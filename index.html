@@ -383,6 +383,7 @@
       if (isDragging) {
         cubeGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dx * ROT_SPEED);
         cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
+        cubeGroup.quaternion.normalize();
       }
       prevPointer = { x: e.clientX, y: e.clientY };
 
