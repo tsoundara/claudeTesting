@@ -49,7 +49,7 @@
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
   </div>
-  <div id="hint">Drag to orbit &nbsp;|&nbsp; Right / Top / Left faces: ◀▶ arrows rotate every layer</div>
+  <div id="hint">Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers</div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script>
   (function () {
@@ -69,7 +69,19 @@
     const CUBIE_SIZE  = 0.92;
     const CUBIE_GAP   = 1.0;
     const SCRAMBLE_MOVES = 20;
-    const CLICK_THRESHOLD = 6; // px — below this distance = click, not drag
+    const CLICK_THRESHOLD = 6;
+    const SNAP_SPEED = 0.04;
+
+    // 6 face configs: local normal/up/right for each cube face.
+    // Used for snap targets and contextual arrow positioning.
+    const FACE_CONFIGS = [
+      { normal: new THREE.Vector3( 0, 0, 1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 1, 0, 0) },
+      { normal: new THREE.Vector3( 0, 0,-1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3(-1, 0, 0) },
+      { normal: new THREE.Vector3( 1, 0, 0), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 0, 0,-1) },
+      { normal: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 0, 0, 1) },
+      { normal: new THREE.Vector3( 0, 1, 0), up: new THREE.Vector3( 0, 0,-1), right: new THREE.Vector3( 1, 0, 0) },
+      { normal: new THREE.Vector3( 0,-1, 0), up: new THREE.Vector3( 0, 0, 1), right: new THREE.Vector3( 1, 0, 0) },
+    ];
 
     // ── THREE.JS SETUP ─────────────────────────────────────────────────────────
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -89,7 +101,6 @@
     dirLight.position.set(5, 10, 7);
     scene.add(dirLight);
 
-    // All cubies and arrow planes live inside cubeGroup; orbit rotates cubeGroup.
     const cubeGroup = new THREE.Group();
     scene.add(cubeGroup);
 
@@ -100,10 +111,9 @@
     });
 
     // ── CUBE CONSTRUCTION ──────────────────────────────────────────────────────
-    const cubies = []; // { mesh }
+    const cubies = [];
 
     function makeMaterials(ix, iy, iz) {
-      // BoxGeometry face order: +X, -X, +Y, -Y, +Z, -Z
       return [
         new THREE.MeshLambertMaterial({ color: ix ===  1 ? COLORS.BLUE   : COLORS.BLACK }),
         new THREE.MeshLambertMaterial({ color: ix === -1 ? COLORS.GREEN  : COLORS.BLACK }),
@@ -116,21 +126,40 @@
 
     (function createCubies() {
       const geo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
-      for (let ix = -1; ix <= 1; ix++) {
-        for (let iy = -1; iy <= 1; iy++) {
+      for (let ix = -1; ix <= 1; ix++)
+        for (let iy = -1; iy <= 1; iy++)
           for (let iz = -1; iz <= 1; iz++) {
             const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz));
             mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
             cubeGroup.add(mesh);
             cubies.push({ mesh });
           }
-        }
-      }
     })();
 
-    // ── ARROW CONTROLS ─────────────────────────────────────────────────────────
+    // ── SNAP TARGET QUATERNIONS ────────────────────────────────────────────────
+    // Precompute the cubeGroup quaternion that puts each face head-on to camera.
+
+    (function computeSnapTargets() {
+      const camDir = camera.position.clone().normalize();
+      // Build target frame: face normal → camDir, up → projected world-up
+      const worldUp = new THREE.Vector3(0, 1, 0);
+      const tRight = new THREE.Vector3().crossVectors(camDir, worldUp).normalize();
+      const tUp    = new THREE.Vector3().crossVectors(tRight, camDir).normalize();
+      // Target basis columns: (tRight, tUp, camDir)
+      const tgtMat = new THREE.Matrix4().makeBasis(tRight, tUp, camDir);
+
+      FACE_CONFIGS.forEach(fc => {
+        // Source basis columns for this face: (right, up, normal)
+        const srcMat = new THREE.Matrix4().makeBasis(fc.right, fc.up, fc.normal);
+        const combined = tgtMat.clone().multiply(srcMat.clone().invert());
+        fc.targetQuat = new THREE.Quaternion().setFromRotationMatrix(combined);
+      });
+    })();
+
+    // ── ARROW CONTROLS (dynamic, contextual) ─────────────────────────────────
     const arrowMeshes = [];
-    const arrowToMove = new Map(); // Mesh → { axis, layer, dir }
+    const arrowToMove = new Map();
+    const arrows = { top: [], bottom: [], left: [], right: [] };
 
     function makeArrowTexture(symbol) {
       const c = document.createElement('canvas');
@@ -148,49 +177,127 @@
       return new THREE.CanvasTexture(c);
     }
 
-    // ◀ = dir:-1, ▶ = dir:+1 uniformly across all axes.
-    // Each axis uses a dedicated face so all 9 layers (incl. middle) have arrows.
-    const ARROW_DEFS = [
-      // ── Y-axis layers on RIGHT (+X) face — 3 rows at y=-1,0,1 ─────────────
-      { pos:[ 1.55,  1, -0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 1, dir:-1}, sym:'◀' },
-      { pos:[ 1.55,  1,  0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 1, dir: 1}, sym:'▶' },
-      { pos:[ 1.55,  0, -0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 0, dir:-1}, sym:'◀' },
-      { pos:[ 1.55,  0,  0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer: 0, dir: 1}, sym:'▶' },
-      { pos:[ 1.55, -1, -0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer:-1, dir:-1}, sym:'◀' },
-      { pos:[ 1.55, -1,  0.35], rot:[0,  Math.PI/2, 0], move:{axis:'y', layer:-1, dir: 1}, sym:'▶' },
-      // ── X-axis layers on TOP (+Y) face — 3 columns at x=-1,0,1 ────────────
-      { pos:[ 1, 1.55, -0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 1, dir:-1}, sym:'◀' },
-      { pos:[ 1, 1.55,  0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 1, dir: 1}, sym:'▶' },
-      { pos:[ 0, 1.55, -0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 0, dir:-1}, sym:'◀' },
-      { pos:[ 0, 1.55,  0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer: 0, dir: 1}, sym:'▶' },
-      { pos:[-1, 1.55, -0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer:-1, dir:-1}, sym:'◀' },
-      { pos:[-1, 1.55,  0.35], rot:[Math.PI/2, 0, 0], move:{axis:'x', layer:-1, dir: 1}, sym:'▶' },
-      // ── Z-axis layers on LEFT (-X) face — 3 depths at z=-1,0,1 ────────────
-      { pos:[-1.55, -0.35,  1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 1, dir:-1}, sym:'◀' },
-      { pos:[-1.55,  0.35,  1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 1, dir: 1}, sym:'▶' },
-      { pos:[-1.55, -0.35,  0], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 0, dir:-1}, sym:'◀' },
-      { pos:[-1.55,  0.35,  0], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer: 0, dir: 1}, sym:'▶' },
-      { pos:[-1.55, -0.35, -1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer:-1, dir:-1}, sym:'◀' },
-      { pos:[-1.55,  0.35, -1], rot:[0, -Math.PI/2, 0], move:{axis:'z', layer:-1, dir: 1}, sym:'▶' },
-    ];
-
     (function createArrows() {
-      const geo = new THREE.PlaneGeometry(0.52, 0.52);
-      ARROW_DEFS.forEach(def => {
-        const mat = new THREE.MeshBasicMaterial({
-          map: makeArrowTexture(def.sym),
-          transparent: true,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(...def.pos);
-        mesh.rotation.set(...def.rot);
-        cubeGroup.add(mesh);
-        arrowMeshes.push(mesh);
-        arrowToMove.set(mesh, def.move);
-      });
+      const geo = new THREE.PlaneGeometry(0.55, 0.55);
+      const symbols = { top: '\u25B2', bottom: '\u25BC', left: '\u25C4', right: '\u25BA' };
+      for (const edge of ['top', 'bottom', 'left', 'right']) {
+        for (let i = 0; i < 3; i++) {
+          const mat = new THREE.MeshBasicMaterial({
+            map: makeArrowTexture(symbols[edge]),
+            transparent: true,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          });
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.visible = false;
+          cubeGroup.add(mesh);
+          arrows[edge].push(mesh);
+          arrowMeshes.push(mesh);
+        }
+      }
     })();
+
+    // Position + map all 12 arrows around a given front face.
+    function positionArrows(fc) {
+      const { normal, up, right } = fc;
+      arrowToMove.clear();
+
+      // Orient planes to face outward along the face normal.
+      const arrowQuat = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1), normal
+      );
+
+      // Determine axis letter and sign for the right/up directions.
+      const rLetter = right.x !== 0 ? 'x' : right.y !== 0 ? 'y' : 'z';
+      const rSign   = right[rLetter]; // +1 or -1
+      const uLetter = up.x    !== 0 ? 'x' : up.y    !== 0 ? 'y' : 'z';
+      const uSign   = up[uLetter];
+
+      const cols = [-1, 0, 1];
+      const rows = [ 1, 0,-1];
+
+      function place(mesh, pos, move) {
+        mesh.position.copy(pos);
+        mesh.quaternion.copy(arrowQuat);
+        mesh.visible = true;
+        arrowToMove.set(mesh, move);
+      }
+
+      // Top ▲ arrows — push column upward
+      cols.forEach((c, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(c))
+          .add(up.clone().multiplyScalar(1.8));
+        place(arrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
+      });
+
+      // Bottom ▼ arrows — push column downward
+      cols.forEach((c, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(c))
+          .add(up.clone().multiplyScalar(-1.8));
+        place(arrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
+      });
+
+      // Left ◄ arrows — push row leftward
+      rows.forEach((r, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(-1.8))
+          .add(up.clone().multiplyScalar(r));
+        place(arrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
+      });
+
+      // Right ► arrows — push row rightward
+      rows.forEach((r, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(1.8))
+          .add(up.clone().multiplyScalar(r));
+        place(arrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
+      });
+    }
+
+    // ── SNAP SYSTEM ────────────────────────────────────────────────────────────
+    let isSnapping      = false;
+    let snapStartQuat   = null;
+    let snapTargetQuat  = null;
+    let snapProgress    = 0;
+    let snapFaceConfig  = null;
+    let currentFaceConfig = null;
+
+    function startSnap() {
+      const cur = cubeGroup.quaternion;
+      let bestDot = -1;
+      let bestFC  = null;
+      let bestQ   = null;
+
+      FACE_CONFIGS.forEach(fc => {
+        let d = cur.dot(fc.targetQuat);
+        if (Math.abs(d) > bestDot) {
+          bestDot = Math.abs(d);
+          bestFC  = fc;
+          // Negate if dot<0 for shorter slerp path.
+          bestQ = d < 0
+            ? fc.targetQuat.clone().set(
+                -fc.targetQuat.x, -fc.targetQuat.y,
+                -fc.targetQuat.z, -fc.targetQuat.w)
+            : fc.targetQuat.clone();
+        }
+      });
+
+      arrowMeshes.forEach(m => { m.visible = false; });
+      isSnapping     = true;
+      snapStartQuat  = cur.clone();
+      snapTargetQuat = bestQ;
+      snapProgress   = 0;
+      snapFaceConfig = bestFC;
+    }
+
+    function finalizeSnap() {
+      cubeGroup.quaternion.copy(snapTargetQuat);
+      isSnapping = false;
+      currentFaceConfig = snapFaceConfig;
+      positionArrows(snapFaceConfig);
+    }
 
     // ── MOVE ENGINE ────────────────────────────────────────────────────────────
     const moveHistory = [];
@@ -198,9 +305,6 @@
     let   currentAnim = null;
     let   animSpeed   = ANIM_SPEED_SCRAMBLE;
 
-    // Uses cubeGroup-local positions (orbit-independent).
-    // All cubies are direct children of cubeGroup except during animation,
-    // and getCubiesInLayer is only called when no animation is in progress.
     function getCubiesInLayer(axis, layer) {
       return cubies.filter(c => Math.round(c.mesh.position[axis]) === layer);
     }
@@ -213,7 +317,6 @@
       const { axis, layer, dir } = move;
       const layerCubies = getCubiesInLayer(axis, layer);
 
-      // Pivot lives in cubeGroup so rotation happens in cubeGroup-local space.
       const pivot = new THREE.Group();
       cubeGroup.add(pivot);
       layerCubies.forEach(c => pivot.attach(c.mesh));
@@ -232,14 +335,11 @@
 
     function finalizeMove() {
       const { pivot, cubies: layerCubies } = currentAnim;
-      // Snap to exact final quaternion before re-parenting (eliminates float drift).
       pivot.quaternion.copy(currentAnim.endQuat);
       pivot.updateMatrixWorld();
 
       layerCubies.forEach(c => {
-        // Re-parent back to cubeGroup so orbit rotation keeps working.
         cubeGroup.attach(c.mesh);
-        // Snap local positions to integer grid.
         const p = c.mesh.position;
         p.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
       });
@@ -308,7 +408,12 @@
 
       if (pointerStart) {
         const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
-        if (dist >= CLICK_THRESHOLD) isDragging = true;
+        if (dist >= CLICK_THRESHOLD && !isDragging) {
+          isDragging = true;
+          // Hide arrows and cancel any in-progress snap when drag starts
+          arrowMeshes.forEach(m => { m.visible = false; });
+          if (isSnapping) isSnapping = false;
+        }
       }
 
       if (isDragging) {
@@ -317,16 +422,18 @@
       }
       prevPointer = { x: e.clientX, y: e.clientY };
 
-      // Hover highlight on arrow planes
-      mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
-      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(arrowMeshes);
-      const newHovered = hits.length > 0 ? hits[0].object : null;
-      if (newHovered !== hoveredArrow) {
-        if (hoveredArrow) hoveredArrow.scale.setScalar(1.0);
-        hoveredArrow = newHovered;
-        if (hoveredArrow) hoveredArrow.scale.setScalar(1.18);
+      // Hover highlight on arrow planes (only when not dragging)
+      if (!isDragging) {
+        mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(arrowMeshes);
+        const newHovered = hits.length > 0 ? hits[0].object : null;
+        if (newHovered !== hoveredArrow) {
+          if (hoveredArrow) hoveredArrow.scale.setScalar(1.0);
+          hoveredArrow = newHovered;
+          if (hoveredArrow) hoveredArrow.scale.setScalar(1.18);
+        }
       }
     });
 
@@ -335,17 +442,20 @@
       isDragging   = false;
       pointerStart = null;
 
-      if (!wasDrag) {
-        // Treat as click — check for arrow hit
+      if (wasDrag) {
+        // After drag → snap to nearest face
+        startSnap();
+      } else {
+        // Click → check for arrow hit
         mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
         const hits = raycaster.intersectObjects(arrowMeshes);
         if (hits.length > 0) {
           const move = arrowToMove.get(hits[0].object);
-          if (move && !currentAnim && moveQueue.length === 0) {
+          if (move && !currentAnim && moveQueue.length === 0 && !isSnapping) {
             animSpeed = ANIM_SPEED_MANUAL;
-            enqueueMove(move, true); // record so Solve can reverse manual moves
+            enqueueMove(move, true);
             updateButtons();
           }
         }
@@ -376,6 +486,17 @@
     function tick() {
       requestAnimationFrame(tick);
 
+      // Snap animation (rotates entire cubeGroup to face-on orientation)
+      if (isSnapping) {
+        snapProgress += SNAP_SPEED;
+        const t = easeInOut(Math.min(snapProgress, 1.0));
+        THREE.Quaternion.slerp(snapStartQuat, snapTargetQuat, cubeGroup.quaternion, t);
+        if (snapProgress >= 1.0) {
+          finalizeSnap();
+        }
+      }
+
+      // Move animation (rotates a single layer within cubeGroup)
       if (currentAnim) {
         currentAnim.progress += animSpeed;
         const t = easeInOut(Math.min(currentAnim.progress, 1.0));
@@ -397,6 +518,9 @@
 
       renderer.render(scene, camera);
     }
+
+    // Show arrows for the initial orientation before any drag.
+    startSnap();
 
     tick();
   })();
