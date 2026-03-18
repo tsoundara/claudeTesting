@@ -31,6 +31,30 @@
     #solveBtn { background: #27ae60; color: #fff; }
     #solveBtn:hover:not(:disabled) { background: #2ecc71; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #sizeControl {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      background: #222;
+      border-radius: 8px;
+      padding: 6px 10px;
+    }
+    #sizeControl button {
+      padding: 6px 14px;
+      font-size: 18px;
+      background: #444;
+      color: #fff;
+      border-radius: 6px;
+    }
+    #sizeControl button:hover:not(:disabled) { background: #666; }
+    #sizeLabel {
+      color: #ddd;
+      font-size: 15px;
+      font-weight: 600;
+      min-width: 36px;
+      text-align: center;
+    }
     #hint {
       position: fixed;
       bottom: 20px;
@@ -48,6 +72,11 @@
   <div id="ui">
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
+    <div id="sizeControl">
+      <button id="sizeMinusBtn">−</button>
+      <span id="sizeLabel">3×3</span>
+      <button id="sizePlusBtn">+</button>
+    </div>
   </div>
   <div id="hint">Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers</div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -66,12 +95,13 @@
     const ANIM_SPEED_SCRAMBLE = 0.08;
     const ANIM_SPEED_MANUAL   = 0.05;
     const ANIM_SPEED_SOLVE    = 0.05;
-    const CUBIE_SIZE  = 0.92;
-    const CUBIE_GAP   = 1.0;
-    const SCRAMBLE_MOVES = 20;
+    const CUBIE_SIZE      = 0.92;
+    const CUBIE_GAP       = 1.0;
     const CLICK_THRESHOLD = 6;
+    const MIN_SIZE        = 2;
+    const MAX_SIZE        = 6;
+
     // 6 face configs: local normal/up/right for each cube face.
-    // Used for snap targets and contextual arrow positioning.
     const FACE_CONFIGS = [
       { normal: new THREE.Vector3( 0, 0, 1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 1, 0, 0) },
       { normal: new THREE.Vector3( 0, 0,-1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3(-1, 0, 0) },
@@ -108,80 +138,104 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // ── CUBE CONSTRUCTION ──────────────────────────────────────────────────────
-    const cubies = [];
-
-    function makeMaterials(ix, iy, iz) {
-      return [
-        new THREE.MeshLambertMaterial({ color: ix ===  1 ? COLORS.BLUE   : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: ix === -1 ? COLORS.GREEN  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iy ===  1 ? COLORS.WHITE  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iy === -1 ? COLORS.YELLOW : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iz ===  1 ? COLORS.RED    : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iz === -1 ? COLORS.ORANGE : COLORS.BLACK }),
-      ];
-    }
-
-    (function createCubies() {
-      const geo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
-      for (let ix = -1; ix <= 1; ix++)
-        for (let iy = -1; iy <= 1; iy++)
-          for (let iz = -1; iz <= 1; iz++) {
-            const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz));
-            mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
-            cubeGroup.add(mesh);
-            cubies.push({ mesh });
-          }
-    })();
-
     // ── SNAP TARGET QUATERNIONS ────────────────────────────────────────────────
     // Precompute the cubeGroup quaternion that puts each face head-on to camera.
-
+    // Camera direction stays constant across sizes (only distance changes), so
+    // these only need to be computed once.
     (function computeSnapTargets() {
       const camDir = camera.position.clone().normalize();
-      // Build target frame: face normal → camDir, up → projected world-up
       const worldUp = new THREE.Vector3(0, 1, 0);
       const tRight = new THREE.Vector3().crossVectors(camDir, worldUp).normalize();
       const tUp    = new THREE.Vector3().crossVectors(tRight, camDir).normalize();
-      // Target basis columns: (tRight, tUp, camDir)
       const tgtMat = new THREE.Matrix4().makeBasis(tRight, tUp, camDir);
-
       FACE_CONFIGS.forEach(fc => {
-        // Source basis columns for this face: (right, up, normal)
-        const srcMat = new THREE.Matrix4().makeBasis(fc.right, fc.up, fc.normal);
+        const srcMat  = new THREE.Matrix4().makeBasis(fc.right, fc.up, fc.normal);
         const combined = tgtMat.clone().multiply(srcMat.clone().invert());
         fc.targetQuat = new THREE.Quaternion().setFromRotationMatrix(combined);
       });
     })();
 
-    // ── ARROW CONTROLS (dynamic, contextual) ─────────────────────────────────
-    const arrowMeshes = [];
-    const arrowToMove = new Map();
-    const arrows = { top: [], bottom: [], left: [], right: [] };
+    // ── CUBE STATE ─────────────────────────────────────────────────────────────
+    let cubeSize = 3;
+    const cubies = [];
 
-    function makeArrowTexture(symbol) {
-      const c = document.createElement('canvas');
-      c.width = c.height = 128;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
-      ctx.beginPath();
-      ctx.arc(64, 64, 58, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.font = 'bold 80px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(symbol, 64, 70);
-      return new THREE.CanvasTexture(c);
+    // Returns the layer positions for an N-size cube: e.g. N=3 → [-1, 0, 1], N=4 → [-1.5, -0.5, 0.5, 1.5]
+    function getLayers(N) {
+      const offset = (N - 1) / 2;
+      return Array.from({ length: N }, (_, i) => -offset + i);
     }
 
-    (function createArrows() {
-      const geo = new THREE.PlaneGeometry(0.55, 0.55);
-      const symbols = { top: '\u25B2', bottom: '\u25BC', left: '\u25C4', right: '\u25BA' };
+    function makeMaterials(ix, iy, iz, N) {
+      const e = (N - 1) / 2;
+      return [
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix - e) < 0.1 ? COLORS.BLUE   : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix + e) < 0.1 ? COLORS.GREEN  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy - e) < 0.1 ? COLORS.WHITE  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy + e) < 0.1 ? COLORS.YELLOW : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz - e) < 0.1 ? COLORS.RED    : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz + e) < 0.1 ? COLORS.ORANGE : COLORS.BLACK }),
+      ];
+    }
+
+    function buildCube(N) {
+      cubies.forEach(c => cubeGroup.remove(c.mesh));
+      cubies.length = 0;
+      const geo    = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
+      const layers = getLayers(N);
+      for (const ix of layers)
+        for (const iy of layers)
+          for (const iz of layers) {
+            const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz, N));
+            mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
+            cubeGroup.add(mesh);
+            cubies.push({ mesh });
+          }
+    }
+
+    // ── ARROW CONTROLS ─────────────────────────────────────────────────────────
+    let arrowMeshes   = [];
+    let currentArrows = { top: [], bottom: [], left: [], right: [] };
+    const arrowToMove = new Map();
+
+    // Pre-render arrow textures once; reused across all sizes.
+    const arrowTextures = (() => {
+      function make(symbol) {
+        const c = document.createElement('canvas');
+        c.width = c.height = 128;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.beginPath();
+        ctx.arc(64, 64, 58, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.font = 'bold 80px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(symbol, 64, 70);
+        return new THREE.CanvasTexture(c);
+      }
+      return {
+        top:    make('\u25B2'),
+        bottom: make('\u25BC'),
+        left:   make('\u25C4'),
+        right:  make('\u25BA'),
+      };
+    })();
+
+    function rebuildArrows(N) {
+      arrowMeshes.forEach(m => cubeGroup.remove(m));
+      arrowMeshes   = [];
+      arrowToMove.clear();
+      currentArrows = { top: [], bottom: [], left: [], right: [] };
+
+      // Shrink arrow size for larger cubes so they don't crowd each other.
+      const arrowSize = Math.max(0.38, 0.55 * (3 / N));
+      const geo = new THREE.PlaneGeometry(arrowSize, arrowSize);
+
       for (const edge of ['top', 'bottom', 'left', 'right']) {
-        for (let i = 0; i < 3; i++) {
-          const mat = new THREE.MeshBasicMaterial({
-            map: makeArrowTexture(symbols[edge]),
+        for (let i = 0; i < N; i++) {
+          const mat  = new THREE.MeshBasicMaterial({
+            map: arrowTextures[edge],
             transparent: true,
             side: THREE.DoubleSide,
             depthWrite: false,
@@ -189,30 +243,28 @@
           const mesh = new THREE.Mesh(geo, mat);
           mesh.visible = false;
           cubeGroup.add(mesh);
-          arrows[edge].push(mesh);
+          currentArrows[edge].push(mesh);
           arrowMeshes.push(mesh);
         }
       }
-    })();
+    }
 
-    // Position + map all 12 arrows around a given front face.
     function positionArrows(fc) {
       const { normal, up, right } = fc;
       arrowToMove.clear();
 
-      // Orient planes to face outward along the face normal.
       const arrowQuat = new THREE.Quaternion().setFromUnitVectors(
         new THREE.Vector3(0, 0, 1), normal
       );
 
-      // Determine axis letter and sign for the right/up directions.
       const rLetter = right.x !== 0 ? 'x' : right.y !== 0 ? 'y' : 'z';
-      const rSign   = right[rLetter]; // +1 or -1
+      const rSign   = right[rLetter];
       const uLetter = up.x    !== 0 ? 'x' : up.y    !== 0 ? 'y' : 'z';
       const uSign   = up[uLetter];
 
-      const cols = [-1, 0, 1];
-      const rows = [ 1, 0,-1];
+      const layers    = getLayers(cubeSize);
+      // Distance from cube centre to the arrow row/column perimeter.
+      const perimDist = (cubeSize - 1) / 2 + 0.8;
 
       function place(mesh, pos, move) {
         mesh.position.copy(pos);
@@ -221,36 +273,36 @@
         arrowToMove.set(mesh, move);
       }
 
-      // Top ▲ arrows — push column upward
-      cols.forEach((c, i) => {
+      // Top ▲ — one per column, push column upward
+      layers.forEach((c, i) => {
         const pos = normal.clone().multiplyScalar(0.1)
           .add(right.clone().multiplyScalar(c))
-          .add(up.clone().multiplyScalar(1.8));
-        place(arrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
+          .add(up.clone().multiplyScalar(perimDist));
+        place(currentArrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
       });
 
-      // Bottom ▼ arrows — push column downward
-      cols.forEach((c, i) => {
+      // Bottom ▼ — one per column, push column downward
+      layers.forEach((c, i) => {
         const pos = normal.clone().multiplyScalar(0.1)
           .add(right.clone().multiplyScalar(c))
-          .add(up.clone().multiplyScalar(-1.8));
-        place(arrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
+          .add(up.clone().multiplyScalar(-perimDist));
+        place(currentArrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
       });
 
-      // Left ◄ arrows — push row leftward
-      rows.forEach((r, i) => {
+      // Left ◄ — one per row, push row leftward (displayed top-to-bottom)
+      [...layers].reverse().forEach((r, i) => {
         const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(-1.8))
+          .add(right.clone().multiplyScalar(-perimDist))
           .add(up.clone().multiplyScalar(r));
-        place(arrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
+        place(currentArrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
       });
 
-      // Right ► arrows — push row rightward
-      rows.forEach((r, i) => {
+      // Right ► — one per row, push row rightward
+      [...layers].reverse().forEach((r, i) => {
         const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(1.8))
+          .add(right.clone().multiplyScalar(perimDist))
           .add(up.clone().multiplyScalar(r));
-        place(arrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
+        place(currentArrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
       });
     }
 
@@ -271,8 +323,10 @@
     let   currentAnim = null;
     let   animSpeed   = ANIM_SPEED_SCRAMBLE;
 
+    // Tolerance-based layer lookup — handles both integer (odd N) and
+    // half-integer (even N) positions correctly.
     function getCubiesInLayer(axis, layer) {
-      return cubies.filter(c => Math.round(c.mesh.position[axis]) === layer);
+      return cubies.filter(c => Math.abs(c.mesh.position[axis] - layer) < 0.1);
     }
 
     function easeInOut(t) {
@@ -307,7 +361,13 @@
       layerCubies.forEach(c => {
         cubeGroup.attach(c.mesh);
         const p = c.mesh.position;
-        p.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
+        // Round to nearest 0.5 — works for both integer (odd N) and
+        // half-integer (even N) layer positions.
+        p.set(
+          Math.round(p.x * 2) / 2,
+          Math.round(p.y * 2) / 2,
+          Math.round(p.z * 2) / 2,
+        );
       });
       cubeGroup.remove(pivot);
       currentAnim = null;
@@ -326,15 +386,17 @@
     }
 
     // ── SCRAMBLE / SOLVE ───────────────────────────────────────────────────────
-    const AXES   = ['x', 'y', 'z'];
-    const LAYERS = [-1, 0, 1];
+    const AXES = ['x', 'y', 'z'];
 
-    function scramble(n) {
+    function scramble() {
+      const layers = getLayers(cubeSize);
+      // Scale move count with cube complexity.
+      const n = cubeSize * cubeSize * 2;
       animSpeed = ANIM_SPEED_SCRAMBLE;
       for (let i = 0; i < n; i++) {
         enqueueMove({
           axis:  AXES[Math.floor(Math.random() * 3)],
-          layer: LAYERS[Math.floor(Math.random() * 3)],
+          layer: layers[Math.floor(Math.random() * layers.length)],
           dir:   Math.random() < 0.5 ? 1 : -1,
         }, true);
       }
@@ -349,6 +411,28 @@
       }));
       moveHistory.length = 0;
       solveMoves.forEach(m => enqueueMove(m, false));
+      updateButtons();
+    }
+
+    // ── INIT CUBE ──────────────────────────────────────────────────────────────
+    function initCube(N) {
+      cubeSize = N;
+      moveQueue.length   = 0;
+      moveHistory.length = 0;
+      currentAnim        = null;
+      cubeGroup.quaternion.identity();
+      if (hoveredArrow) { hoveredArrow.scale.setScalar(1.0); hoveredArrow = null; }
+
+      buildCube(N);
+      rebuildArrows(N);
+
+      // Scale camera distance with cube size, keeping the same view angle.
+      const d = 3.5 + N * 1.5;
+      camera.position.set(d * 4 / 7, d * 4 / 7, d);
+      camera.lookAt(0, 0, 0);
+
+      updateArrows();
+      updateSizeLabel();
       updateButtons();
     }
 
@@ -408,10 +492,8 @@
       pointerStart = null;
 
       if (wasDrag) {
-        // After drag → show arrows for nearest face (no snap animation)
         updateArrows();
       } else {
-        // Click → check for arrow hit
         mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
@@ -434,24 +516,33 @@
     });
 
     // ── UI ─────────────────────────────────────────────────────────────────────
-    const scrambleBtn = document.getElementById('scrambleBtn');
-    const solveBtn    = document.getElementById('solveBtn');
+    const scrambleBtn  = document.getElementById('scrambleBtn');
+    const solveBtn     = document.getElementById('solveBtn');
+    const sizeMinusBtn = document.getElementById('sizeMinusBtn');
+    const sizePlusBtn  = document.getElementById('sizePlusBtn');
+    const sizeLabel    = document.getElementById('sizeLabel');
+
+    function updateSizeLabel() {
+      sizeLabel.textContent = `${cubeSize}\u00d7${cubeSize}`;
+    }
 
     function updateButtons() {
       const busy = currentAnim !== null || moveQueue.length > 0;
-      scrambleBtn.disabled = busy;
-      solveBtn.disabled    = busy || moveHistory.length === 0;
+      scrambleBtn.disabled  = busy;
+      solveBtn.disabled     = busy || moveHistory.length === 0;
+      sizeMinusBtn.disabled = busy || cubeSize <= MIN_SIZE;
+      sizePlusBtn.disabled  = busy || cubeSize >= MAX_SIZE;
     }
 
-    scrambleBtn.addEventListener('click', () => scramble(SCRAMBLE_MOVES));
+    scrambleBtn.addEventListener('click', scramble);
     solveBtn.addEventListener('click', solve);
-    updateButtons();
+    sizeMinusBtn.addEventListener('click', () => { if (cubeSize > MIN_SIZE) initCube(cubeSize - 1); });
+    sizePlusBtn.addEventListener('click',  () => { if (cubeSize < MAX_SIZE) initCube(cubeSize + 1); });
 
     // ── MAIN LOOP ──────────────────────────────────────────────────────────────
     function tick() {
       requestAnimationFrame(tick);
 
-      // Move animation (rotates a single layer within cubeGroup)
       if (currentAnim) {
         currentAnim.progress += animSpeed;
         const t = easeInOut(Math.min(currentAnim.progress, 1.0));
@@ -474,9 +565,7 @@
       renderer.render(scene, camera);
     }
 
-    // Show arrows for the initial orientation before any drag.
-    updateArrows();
-
+    initCube(3);
     tick();
   })();
   </script>
