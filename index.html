@@ -70,8 +70,6 @@
     const CUBIE_GAP   = 1.0;
     const SCRAMBLE_MOVES = 20;
     const CLICK_THRESHOLD = 6;
-    const SNAP_SPEED = 0.04;
-
     // 6 face configs: local normal/up/right for each cube face.
     // Used for snap targets and contextual arrow positioning.
     const FACE_CONFIGS = [
@@ -256,47 +254,15 @@
       });
     }
 
-    // ── SNAP SYSTEM ────────────────────────────────────────────────────────────
-    let isSnapping      = false;
-    let snapStartQuat   = null;
-    let snapTargetQuat  = null;
-    let snapProgress    = 0;
-    let snapFaceConfig  = null;
-    let currentFaceConfig = null;
-
-    function startSnap() {
+    function updateArrows() {
       const cur = cubeGroup.quaternion;
       let bestDot = -1;
       let bestFC  = null;
-      let bestQ   = null;
-
       FACE_CONFIGS.forEach(fc => {
-        let d = cur.dot(fc.targetQuat);
-        if (Math.abs(d) > bestDot) {
-          bestDot = Math.abs(d);
-          bestFC  = fc;
-          // Negate if dot<0 for shorter slerp path.
-          bestQ = d < 0
-            ? fc.targetQuat.clone().set(
-                -fc.targetQuat.x, -fc.targetQuat.y,
-                -fc.targetQuat.z, -fc.targetQuat.w)
-            : fc.targetQuat.clone();
-        }
+        const d = Math.abs(cur.dot(fc.targetQuat));
+        if (d > bestDot) { bestDot = d; bestFC = fc; }
       });
-
-      arrowMeshes.forEach(m => { m.visible = false; });
-      isSnapping     = true;
-      snapStartQuat  = cur.clone();
-      snapTargetQuat = bestQ;
-      snapProgress   = 0;
-      snapFaceConfig = bestFC;
-    }
-
-    function finalizeSnap() {
-      cubeGroup.quaternion.copy(snapTargetQuat);
-      isSnapping = false;
-      currentFaceConfig = snapFaceConfig;
-      positionArrows(snapFaceConfig);
+      positionArrows(bestFC);
     }
 
     // ── MOVE ENGINE ────────────────────────────────────────────────────────────
@@ -410,9 +376,7 @@
         const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
         if (dist >= CLICK_THRESHOLD && !isDragging) {
           isDragging = true;
-          // Hide arrows and cancel any in-progress snap when drag starts
           arrowMeshes.forEach(m => { m.visible = false; });
-          if (isSnapping) isSnapping = false;
         }
       }
 
@@ -443,8 +407,8 @@
       pointerStart = null;
 
       if (wasDrag) {
-        // After drag → snap to nearest face
-        startSnap();
+        // After drag → show arrows for nearest face (no snap animation)
+        updateArrows();
       } else {
         // Click → check for arrow hit
         mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
@@ -453,7 +417,7 @@
         const hits = raycaster.intersectObjects(arrowMeshes);
         if (hits.length > 0) {
           const move = arrowToMove.get(hits[0].object);
-          if (move && !currentAnim && moveQueue.length === 0 && !isSnapping) {
+          if (move && !currentAnim && moveQueue.length === 0) {
             animSpeed = ANIM_SPEED_MANUAL;
             enqueueMove(move, true);
             updateButtons();
@@ -486,16 +450,6 @@
     function tick() {
       requestAnimationFrame(tick);
 
-      // Snap animation (rotates entire cubeGroup to face-on orientation)
-      if (isSnapping) {
-        snapProgress += SNAP_SPEED;
-        const t = easeInOut(Math.min(snapProgress, 1.0));
-        THREE.Quaternion.slerp(snapStartQuat, snapTargetQuat, cubeGroup.quaternion, t);
-        if (snapProgress >= 1.0) {
-          finalizeSnap();
-        }
-      }
-
       // Move animation (rotates a single layer within cubeGroup)
       if (currentAnim) {
         currentAnim.progress += animSpeed;
@@ -520,7 +474,7 @@
     }
 
     // Show arrows for the initial orientation before any drag.
-    startSnap();
+    updateArrows();
 
     tick();
   })();
