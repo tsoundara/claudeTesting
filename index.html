@@ -333,7 +333,7 @@
 
     // dmSlots[i] = { homePos: Vector3, occupant: cubie | null }
     const dmSlots  = [];
-    let   dmGhosts = [];   // wireframe meshes, one per slot
+    let   dmGhosts = [];   // node-point spheres, one per slot
 
     // Per-cubie fields set on enterDM: cubie.isFloating, cubie.slotIndex
     // DM animation queue: { cubie, from, to, progress, onDone }
@@ -371,6 +371,12 @@
           dmAnims.splice(i, 1);
         }
       }
+      // Pulse idle node points
+      const pulse = 1 + 0.18 * Math.sin(Date.now() * 0.004);
+      dmGhosts.forEach((g, i) => {
+        if (!g.visible || i === dmSnapIdx) return;
+        g.scale.setScalar(pulse);
+      });
     }
 
     // Find nearest empty slot within DM_SNAP_DIST; returns index or null.
@@ -477,12 +483,14 @@
       if (nearest !== dmSnapIdx) {
         if (dmSnapIdx >= 0) {
           dmGhosts[dmSnapIdx].material.color.setHex(0x00e5ff);
-          dmGhosts[dmSnapIdx].material.opacity = 0.3;
+          dmGhosts[dmSnapIdx].material.opacity = 0.85;
+          dmGhosts[dmSnapIdx].scale.setScalar(1);
         }
         dmSnapIdx = nearest;
         if (dmSnapIdx !== null) {
           dmGhosts[dmSnapIdx].material.color.setHex(0x00ff88);
-          dmGhosts[dmSnapIdx].material.opacity = 0.85;
+          dmGhosts[dmSnapIdx].material.opacity = 1.0;
+          dmGhosts[dmSnapIdx].scale.setScalar(2.2);
         }
       }
     }
@@ -495,7 +503,8 @@
       // Clear snap highlight
       if (dmSnapIdx >= 0 && dmSnapIdx < dmGhosts.length) {
         dmGhosts[dmSnapIdx].material.color.setHex(0x00e5ff);
-        dmGhosts[dmSnapIdx].material.opacity = 0.3;
+        dmGhosts[dmSnapIdx].material.opacity = 0.85;
+        dmGhosts[dmSnapIdx].scale.setScalar(1);
       }
       dmSnapIdx = -1;
 
@@ -529,17 +538,12 @@
         dmSlots.push({ homePos: c.mesh.position.clone(), occupant: c });
       });
 
-      // Create ghost wireframe meshes (one per slot, hidden while occupied)
-      const gGeo = new THREE.BoxGeometry(CUBIE_SIZE + 0.06, CUBIE_SIZE + 0.06, CUBIE_SIZE + 0.06);
+      // Create node-point spheres (one per slot, hidden while occupied)
+      const nodeGeo = new THREE.SphereGeometry(0.18, 10, 10);
       dmGhosts = [];
       dmSlots.forEach(slot => {
-        const mat = new THREE.MeshBasicMaterial({
-          color: 0x00e5ff,
-          wireframe: true,
-          transparent: true,
-          opacity: 0.3,
-        });
-        const m = new THREE.Mesh(gGeo, mat);
+        const mat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, transparent: true, opacity: 0.85 });
+        const m = new THREE.Mesh(nodeGeo, mat);
         m.position.copy(slot.homePos);
         m.visible = false;
         cubeGroup.add(m);
