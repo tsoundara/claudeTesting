@@ -234,7 +234,7 @@
       currentArrows = { top: [], bottom: [], left: [], right: [] };
 
       // Shrink arrow size for larger cubes so they don't crowd each other.
-      const arrowSize = Math.max(0.38, 0.55 * (3 / N));
+      const arrowSize = Math.min(0.90, 0.55 * N / 3);
       const geo = new THREE.PlaneGeometry(arrowSize, arrowSize);
 
       for (const edge of ['top', 'bottom', 'left', 'right']) {
