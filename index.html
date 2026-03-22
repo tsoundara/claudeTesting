@@ -31,6 +31,10 @@
     #solveBtn { background: #27ae60; color: #fff; }
     #solveBtn:hover:not(:disabled) { background: #2ecc71; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #dmBtn { background: #8e44ad; color: #fff; }
+    #dmBtn:hover:not(:disabled) { background: #9b59b6; }
+    #dmBtn.active { background: #c0392b; }
+    #dmBtn.active:hover:not(:disabled) { background: #e74c3c; }
     #sizeControl {
       display: flex;
       align-items: center;
@@ -72,6 +76,7 @@
   <div id="ui">
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
+    <button id="dmBtn">Take Apart</button>
     <div id="sizeControl">
       <button id="sizeMinusBtn">−</button>
       <span id="sizeLabel">3×3</span>
@@ -419,8 +424,196 @@
       updateButtons();
     }
 
+    // ── DISASSEMBLE MODE ───────────────────────────────────────────────────────
+    const DM_SNAP_DIST  = 0.85;
+    const DM_ANIM_SPEED = 0.07;
+
+    let disassembleMode = false;
+    const dmSlots  = [];   // { homePos, occupant }
+    let   dmGhosts = [];   // wireframe placeholder per slot
+    const dmAnims  = [];   // { cubie, from, to, progress, onDone }
+
+    let dmDragCubie     = null;
+    let dmDragPlane     = null;
+    let dmDragLocalOff  = null;
+    let dmPotentialGrab = null;
+    let dmHoveredCubie  = null;
+    let dmSnapIdx       = -1;
+
+    function dmAddAnim(cubie, toPos, onDone) {
+      const existing = dmAnims.findIndex(a => a.cubie === cubie);
+      if (existing >= 0) dmAnims.splice(existing, 1);
+      dmAnims.push({ cubie, from: cubie.mesh.position.clone(), to: toPos.clone(), progress: 0, onDone: onDone || null });
+    }
+
+    function dmTickAnims() {
+      for (let i = dmAnims.length - 1; i >= 0; i--) {
+        const a = dmAnims[i];
+        a.progress += DM_ANIM_SPEED;
+        const t = easeInOut(Math.min(a.progress, 1));
+        a.cubie.mesh.position.lerpVectors(a.from, a.to, t);
+        if (a.progress >= 1) {
+          a.cubie.mesh.position.copy(a.to);
+          if (a.onDone) a.onDone();
+          dmAnims.splice(i, 1);
+        }
+      }
+    }
+
+    function dmNearestEmptySlot(localPos, maxDist) {
+      let best = null, bestDist = maxDist !== undefined ? maxDist : Infinity;
+      dmSlots.forEach((s, i) => {
+        if (s.occupant !== null) return;
+        const d = localPos.distanceTo(s.homePos);
+        if (d < bestDist) { bestDist = d; best = i; }
+      });
+      return best;
+    }
+
+    function dmPullOut(cubie) {
+      const si = cubie.slotIndex;
+      if (si >= 0) { dmSlots[si].occupant = null; dmGhosts[si].visible = true; }
+      cubie.isFloating = true;
+      cubie.slotIndex  = -1;
+      const homePos = si >= 0 ? dmSlots[si].homePos.clone() : cubie.mesh.position.clone();
+      const outDir  = homePos.clone().normalize();
+      if (outDir.lengthSq() < 0.001) outDir.set(1, 1, 1).normalize();
+      const pullDist = (cubeSize - 1) / 2 + 2.5;
+      dmAddAnim(cubie, homePos.clone().addScaledVector(outDir, pullDist));
+    }
+
+    function dmPlaceCubie(cubie, slotIdx) {
+      const slot     = dmSlots[slotIdx];
+      slot.occupant  = cubie;
+      cubie.slotIndex  = slotIdx;
+      cubie.isFloating = false;
+      dmGhosts[slotIdx].visible = false;
+      dmAddAnim(cubie, slot.homePos, () => { cubie.mesh.position.copy(slot.homePos); });
+    }
+
+    function dmHandleClick(cubie) {
+      cubie.mesh.scale.setScalar(1);
+      if (cubie.isFloating) {
+        const si = dmNearestEmptySlot(cubie.mesh.position);
+        if (si !== null) dmPlaceCubie(cubie, si);
+      } else {
+        dmPullOut(cubie);
+      }
+    }
+
+    function dmStartDrag(cubie, worldHitPoint) {
+      const ai = dmAnims.findIndex(a => a.cubie === cubie);
+      if (ai >= 0) dmAnims.splice(ai, 1);
+      if (!cubie.isFloating) {
+        const si = cubie.slotIndex;
+        if (si >= 0) { dmSlots[si].occupant = null; dmGhosts[si].visible = true; }
+        cubie.isFloating = true;
+        cubie.slotIndex  = -1;
+      }
+      cubie.mesh.scale.setScalar(1);
+      if (dmHoveredCubie === cubie) dmHoveredCubie = null;
+      const worldPos = new THREE.Vector3();
+      cubie.mesh.getWorldPosition(worldPos);
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      dmDragPlane    = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, worldPos);
+      const localHit = cubeGroup.worldToLocal(worldHitPoint.clone());
+      dmDragLocalOff = new THREE.Vector3().subVectors(localHit, cubie.mesh.position);
+      dmDragCubie    = cubie;
+    }
+
+    function dmUpdateDrag(clientX, clientY) {
+      mouse.x =  (clientX / window.innerWidth)  * 2 - 1;
+      mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const worldTarget = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(dmDragPlane, worldTarget)) return;
+      const localTarget = cubeGroup.worldToLocal(worldTarget.clone());
+      localTarget.sub(dmDragLocalOff);
+      dmDragCubie.mesh.position.copy(localTarget);
+      const nearest = dmNearestEmptySlot(localTarget, DM_SNAP_DIST);
+      if (nearest !== dmSnapIdx) {
+        if (dmSnapIdx >= 0) { dmGhosts[dmSnapIdx].material.color.setHex(0x00e5ff); dmGhosts[dmSnapIdx].material.opacity = 0.3; }
+        dmSnapIdx = nearest;
+        if (dmSnapIdx !== null) { dmGhosts[dmSnapIdx].material.color.setHex(0x00ff88); dmGhosts[dmSnapIdx].material.opacity = 0.85; }
+      }
+    }
+
+    function dmEndDrag() {
+      if (!dmDragCubie) return;
+      const cubie = dmDragCubie;
+      dmDragCubie = null; dmDragPlane = null; dmDragLocalOff = null;
+      if (dmSnapIdx >= 0 && dmSnapIdx < dmGhosts.length) {
+        dmGhosts[dmSnapIdx].material.color.setHex(0x00e5ff);
+        dmGhosts[dmSnapIdx].material.opacity = 0.3;
+      }
+      dmSnapIdx = -1;
+      const si = dmNearestEmptySlot(cubie.mesh.position, DM_SNAP_DIST);
+      if (si !== null) dmPlaceCubie(cubie, si);
+    }
+
+    function dmUpdateHover(clientX, clientY) {
+      mouse.x =  (clientX / window.innerWidth)  * 2 - 1;
+      mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const hits   = raycaster.intersectObjects(cubies.map(c => c.mesh));
+      const newHov = hits.length > 0 ? cubies.find(c => c.mesh === hits[0].object) : null;
+      if (newHov !== dmHoveredCubie) {
+        if (dmHoveredCubie) dmHoveredCubie.mesh.scale.setScalar(1);
+        dmHoveredCubie = newHov;
+        if (dmHoveredCubie) dmHoveredCubie.mesh.scale.setScalar(1.12);
+      }
+    }
+
+    function enterDM() {
+      disassembleMode = true;
+      arrowMeshes.forEach(m => m.visible = false);
+      dmSlots.length = 0;
+      cubies.forEach((c, i) => {
+        c.isFloating = false;
+        c.slotIndex  = i;
+        dmSlots.push({ homePos: c.mesh.position.clone(), occupant: c });
+      });
+      const gGeo = new THREE.BoxGeometry(CUBIE_SIZE + 0.06, CUBIE_SIZE + 0.06, CUBIE_SIZE + 0.06);
+      dmGhosts = [];
+      dmSlots.forEach(slot => {
+        const mat = new THREE.MeshBasicMaterial({ color: 0x00e5ff, wireframe: true, transparent: true, opacity: 0.3 });
+        const m = new THREE.Mesh(gGeo, mat);
+        m.position.copy(slot.homePos);
+        m.visible = false;
+        cubeGroup.add(m);
+        dmGhosts.push(m);
+      });
+      document.getElementById('hint').innerHTML =
+        'Click a piece to pull it out &nbsp;|&nbsp; Drag to reposition &nbsp;|&nbsp; Drop near a slot to snap in &nbsp;|&nbsp; Drag empty space to orbit';
+      document.getElementById('dmBtn').textContent = 'Put Together';
+      document.getElementById('dmBtn').classList.add('active');
+      updateButtons();
+    }
+
+    function exitDM() {
+      dmAnims.length = 0;
+      if (dmHoveredCubie) { dmHoveredCubie.mesh.scale.setScalar(1); dmHoveredCubie = null; }
+      if (dmDragCubie)    { dmDragCubie = null; dmDragPlane = null; dmDragLocalOff = null; }
+      dmPotentialGrab = null; dmSnapIdx = -1;
+      cubies.filter(c => c.isFloating).forEach(c => {
+        const si = dmNearestEmptySlot(c.mesh.position);
+        if (si !== null) { c.mesh.position.copy(dmSlots[si].homePos); dmSlots[si].occupant = c; }
+        c.isFloating = false; c.slotIndex = -1;
+      });
+      dmGhosts.forEach(m => cubeGroup.remove(m));
+      dmGhosts = []; dmSlots.length = 0;
+      disassembleMode = false;
+      document.getElementById('hint').innerHTML = 'Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers';
+      document.getElementById('dmBtn').textContent = 'Take Apart';
+      document.getElementById('dmBtn').classList.remove('active');
+      updateArrows();
+      updateButtons();
+    }
+
     // ── INIT CUBE ──────────────────────────────────────────────────────────────
     function initCube(N) {
+      if (disassembleMode) exitDM();
       cubeSize = N;
       moveQueue.length   = 0;
       moveHistory.length = 0;
@@ -455,12 +648,49 @@
       isDragging   = false;
       pointerStart = { x: e.clientX, y: e.clientY };
       prevPointer  = { x: e.clientX, y: e.clientY };
+
+      if (disassembleMode) {
+        mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(cubies.map(c => c.mesh));
+        dmPotentialGrab = hits.length > 0
+          ? { cubie: cubies.find(c => c.mesh === hits[0].object), worldHitPoint: hits[0].point.clone() }
+          : null;
+      }
     });
 
     renderer.domElement.addEventListener('pointermove', e => {
       const dx = e.clientX - prevPointer.x;
       const dy = e.clientY - prevPointer.y;
+      prevPointer = { x: e.clientX, y: e.clientY };
 
+      if (disassembleMode) {
+        if (dmDragCubie) {
+          dmUpdateDrag(e.clientX, e.clientY);
+        } else if (dmPotentialGrab && pointerStart) {
+          const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
+          if (dist >= CLICK_THRESHOLD) { dmStartDrag(dmPotentialGrab.cubie, dmPotentialGrab.worldHitPoint); isDragging = true; }
+        } else {
+          if (pointerStart) {
+            const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
+            if (dist >= CLICK_THRESHOLD && !isDragging) isDragging = true;
+          }
+          if (isDragging) {
+            cubeGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dx * ROT_SPEED);
+            cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
+            cubeGroup.quaternion.normalize();
+          }
+        }
+        if (!dmDragCubie && !isDragging) {
+          dmUpdateHover(e.clientX, e.clientY);
+        } else if (dmHoveredCubie) {
+          dmHoveredCubie.mesh.scale.setScalar(1); dmHoveredCubie = null;
+        }
+        return;
+      }
+
+      // ── Normal mode ──
       if (pointerStart) {
         const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
         if (dist >= CLICK_THRESHOLD && !isDragging) {
@@ -468,15 +698,11 @@
           arrowMeshes.forEach(m => { m.visible = false; });
         }
       }
-
       if (isDragging) {
         cubeGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dx * ROT_SPEED);
         cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
         cubeGroup.quaternion.normalize();
       }
-      prevPointer = { x: e.clientX, y: e.clientY };
-
-      // Hover highlight on arrow planes (only when not dragging)
       if (!isDragging) {
         mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -495,6 +721,13 @@
       const wasDrag = isDragging;
       isDragging   = false;
       pointerStart = null;
+
+      if (disassembleMode) {
+        if (dmDragCubie) { dmEndDrag(); }
+        else if (!wasDrag && dmPotentialGrab) { dmHandleClick(dmPotentialGrab.cubie); }
+        dmPotentialGrab = null;
+        return;
+      }
 
       if (wasDrag) {
         updateArrows();
@@ -515,6 +748,9 @@
     });
 
     renderer.domElement.addEventListener('pointerleave', () => {
+      if (dmDragCubie) dmEndDrag();
+      if (dmHoveredCubie) { dmHoveredCubie.mesh.scale.setScalar(1); dmHoveredCubie = null; }
+      dmPotentialGrab = null;
       isDragging   = false;
       pointerStart = null;
       if (hoveredArrow) { hoveredArrow.scale.setScalar(1.0); hoveredArrow = null; }
@@ -523,6 +759,7 @@
     // ── UI ─────────────────────────────────────────────────────────────────────
     const scrambleBtn  = document.getElementById('scrambleBtn');
     const solveBtn     = document.getElementById('solveBtn');
+    const dmBtn        = document.getElementById('dmBtn');
     const sizeMinusBtn = document.getElementById('sizeMinusBtn');
     const sizePlusBtn  = document.getElementById('sizePlusBtn');
     const sizeLabel    = document.getElementById('sizeLabel');
@@ -533,14 +770,16 @@
 
     function updateButtons() {
       const busy = currentAnim !== null || moveQueue.length > 0;
-      scrambleBtn.disabled  = busy;
-      solveBtn.disabled     = busy || moveHistory.length === 0;
-      sizeMinusBtn.disabled = busy || cubeSize <= MIN_SIZE;
-      sizePlusBtn.disabled  = busy || cubeSize >= MAX_SIZE;
+      scrambleBtn.disabled  = busy || disassembleMode;
+      solveBtn.disabled     = busy || moveHistory.length === 0 || disassembleMode;
+      dmBtn.disabled        = busy;
+      sizeMinusBtn.disabled = busy || disassembleMode || cubeSize <= MIN_SIZE;
+      sizePlusBtn.disabled  = busy || disassembleMode || cubeSize >= MAX_SIZE;
     }
 
     scrambleBtn.addEventListener('click', scramble);
     solveBtn.addEventListener('click', solve);
+    dmBtn.addEventListener('click', () => { if (disassembleMode) exitDM(); else enterDM(); });
     sizeMinusBtn.addEventListener('click', () => { if (cubeSize > MIN_SIZE) initCube(cubeSize - 1); });
     sizePlusBtn.addEventListener('click',  () => { if (cubeSize < MAX_SIZE) initCube(cubeSize + 1); });
 
@@ -566,6 +805,8 @@
       } else {
         processQueue();
       }
+
+      if (disassembleMode) dmTickAnims();
 
       renderer.render(scene, camera);
     }
