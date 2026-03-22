@@ -87,9 +87,9 @@
 
   // ── CONSTANTS ───────────────────────────────────────────────────────────────
   const STUD_SPACING = 1.0;
-  const BRICK_HEIGHT = 3.6;   // full-height brick (3 plate heights)
+  const BRICK_HEIGHT = 1.2;   // full-height brick: 9.6mm / 8mm stud spacing = 1.2
   const STUD_RADIUS  = 0.24;
-  const STUD_HEIGHT  = 0.18;
+  const STUD_HEIGHT  = 0.22;  // 1.8mm / 8mm = ~0.22
   const WALL_INSET   = 0.04;  // keeps brick sides from z-fighting when adjacent
   const CLICK_THRESH = 5;     // px — click vs drag discrimination
   const PLATE_HALF   = 16;    // base plate is 32x32 studs, centered at origin
@@ -128,7 +128,7 @@
   scene.fog = new THREE.Fog(0x1a1a2e, 70, 130);
 
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
-  camera.position.set(0, 22, 36);
+  camera.position.set(0, 14, 24);
   camera.lookAt(0, 0, 0);
 
   // Lights
