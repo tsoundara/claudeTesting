@@ -3,482 +3,476 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Interactive Rubik's Cube</title>
+  <title>Interactive LEGO Builder</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #111; overflow: hidden; font-family: sans-serif; }
+    body { background: #1a1a2e; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     canvas { display: block; touch-action: none; }
+
     #ui {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+      position: fixed; top: 0; left: 0; right: 0; height: 56px;
+      background: rgba(8, 8, 18, 0.9);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 16px;
+      z-index: 10;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+      user-select: none;
     }
-    button {
-      padding: 12px 24px;
-      font-size: 15px;
-      font-weight: 600;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: background 0.2s, opacity 0.2s;
-      letter-spacing: 0.5px;
+    #ui-label {
+      color: #ffd700;
+      font-size: 13px; font-weight: 800; letter-spacing: 3px;
+      text-shadow: 0 0 14px rgba(255,215,0,0.55);
+      flex-shrink: 0;
     }
-    #scrambleBtn { background: #e67e22; color: #fff; }
-    #scrambleBtn:hover:not(:disabled) { background: #f39c12; }
-    #solveBtn { background: #27ae60; color: #fff; }
-    #solveBtn:hover:not(:disabled) { background: #2ecc71; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .sep { width: 1px; height: 28px; background: rgba(255,255,255,0.1); margin: 0 2px; flex-shrink: 0; }
+    .size-btn {
+      background: rgba(255,255,255,0.07);
+      color: rgba(255,255,255,0.55);
+      border: 1.5px solid rgba(255,255,255,0.1);
+      border-radius: 6px; padding: 4px 9px;
+      cursor: pointer; font-size: 11px; font-weight: 700;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .size-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+    .size-btn.active { background: rgba(255,255,255,0.2); color: #fff; border-color: rgba(255,255,255,0.5); }
+    .color-sw {
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.07);
+      cursor: pointer; flex-shrink: 0;
+      transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+    }
+    .color-sw:hover { transform: scale(1.2); }
+    .color-sw.active { border-color: #fff; transform: scale(1.2); box-shadow: 0 0 0 2px rgba(255,255,255,0.22); }
+    #clearBtn {
+      margin-left: auto; flex-shrink: 0;
+      background: rgba(160,25,25,0.6);
+      color: #fff; border: 1.5px solid rgba(200,45,45,0.75);
+      border-radius: 6px; padding: 4px 12px;
+      cursor: pointer; font-size: 11px; font-weight: 700;
+      transition: background 0.12s;
+    }
+    #clearBtn:hover { background: rgba(200,35,35,0.9); }
     #hint {
-      position: fixed;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      color: #555;
-      font-size: 13px;
-      pointer-events: none;
-      text-align: center;
-      line-height: 1.6;
+      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+      color: rgba(255,255,255,0.25); font-size: 11px;
+      pointer-events: none; white-space: nowrap;
+      background: rgba(0,0,0,0.3); padding: 4px 14px; border-radius: 16px;
     }
   </style>
 </head>
 <body>
-  <div id="ui">
-    <button id="scrambleBtn">Scramble</button>
-    <button id="solveBtn">Solve</button>
-  </div>
-  <div id="hint">Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers</div>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-  <script>
-  (function () {
-    // ── CONSTANTS ──────────────────────────────────────────────────────────────
-    const COLORS = {
-      WHITE:  0xffffff,
-      YELLOW: 0xffdd00,
-      RED:    0xee1111,
-      ORANGE: 0xff8800,
-      BLUE:   0x1155ee,
-      GREEN:  0x22aa22,
-      BLACK:  0x111111,
-    };
-    const ANIM_SPEED_SCRAMBLE = 0.08;
-    const ANIM_SPEED_MANUAL   = 0.05;
-    const ANIM_SPEED_SOLVE    = 0.05;
-    const CUBIE_SIZE  = 0.92;
-    const CUBIE_GAP   = 1.0;
-    const SCRAMBLE_MOVES = 20;
-    const CLICK_THRESHOLD = 6;
-    // 6 face configs: local normal/up/right for each cube face.
-    // Used for snap targets and contextual arrow positioning.
-    const FACE_CONFIGS = [
-      { normal: new THREE.Vector3( 0, 0, 1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 1, 0, 0) },
-      { normal: new THREE.Vector3( 0, 0,-1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3(-1, 0, 0) },
-      { normal: new THREE.Vector3( 1, 0, 0), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 0, 0,-1) },
-      { normal: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 0, 0, 1) },
-      { normal: new THREE.Vector3( 0, 1, 0), up: new THREE.Vector3( 0, 0,-1), right: new THREE.Vector3( 1, 0, 0) },
-      { normal: new THREE.Vector3( 0,-1, 0), up: new THREE.Vector3( 0, 0, 1), right: new THREE.Vector3( 1, 0, 0) },
-    ];
 
-    // ── THREE.JS SETUP ─────────────────────────────────────────────────────────
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
+<div id="ui">
+  <span id="ui-label">LEGO</span>
+  <div class="sep"></div>
+  <div id="sizeBar" style="display:flex;gap:4px;align-items:center;"></div>
+  <div class="sep"></div>
+  <div id="colorBar" style="display:flex;gap:5px;align-items:center;"></div>
+  <button id="clearBtn">Clear All</button>
+</div>
+
+<div id="hint">
+  Left-click to place &nbsp;&middot;&nbsp; Right-click to remove &nbsp;&middot;&nbsp; Left-drag to orbit &nbsp;&middot;&nbsp; Scroll to zoom
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── CONSTANTS ───────────────────────────────────────────────────────────────
+  const STUD_SPACING = 1.0;
+  const BRICK_HEIGHT = 3.6;   // full-height brick (3 plate heights)
+  const STUD_RADIUS  = 0.24;
+  const STUD_HEIGHT  = 0.18;
+  const WALL_INSET   = 0.04;  // keeps brick sides from z-fighting when adjacent
+  const CLICK_THRESH = 5;     // px — click vs drag discrimination
+  const PLATE_HALF   = 16;    // base plate is 32x32 studs, centered at origin
+
+  const BRICK_SIZES = [
+    { label: '1x1', cols: 1, rows: 1 },
+    { label: '1x2', cols: 1, rows: 2 },
+    { label: '1x4', cols: 1, rows: 4 },
+    { label: '2x2', cols: 2, rows: 2 },
+    { label: '2x3', cols: 2, rows: 3 },
+    { label: '2x4', cols: 2, rows: 4 },
+  ];
+
+  const LEGO_COLORS = [
+    { name: 'Red',    hex: 0xcc0000 },
+    { name: 'Yellow', hex: 0xffcc00 },
+    { name: 'Blue',   hex: 0x0055bb },
+    { name: 'Green',  hex: 0x237841 },
+    { name: 'White',  hex: 0xf0f0f0 },
+    { name: 'Black',  hex: 0x111111 },
+    { name: 'Orange', hex: 0xff6600 },
+    { name: 'Lime',   hex: 0x73b500 },
+  ];
+
+  // ── RENDERER ────────────────────────────────────────────────────────────────
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  // ── SCENE ───────────────────────────────────────────────────────────────────
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a2e);
+  scene.fog = new THREE.Fog(0x1a1a2e, 70, 130);
+
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
+  camera.position.set(0, 22, 36);
+  camera.lookAt(0, 0, 0);
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+  const sun = new THREE.DirectionalLight(0xffffff, 0.85);
+  sun.position.set(12, 28, 18);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left   = -40;
+  sun.shadow.camera.right  =  40;
+  sun.shadow.camera.top    =  40;
+  sun.shadow.camera.bottom = -40;
+  sun.shadow.camera.near   =  1;
+  sun.shadow.camera.far    =  110;
+  scene.add(sun);
+
+  scene.add(new THREE.HemisphereLight(0xffeedd, 0x334466, 0.4));
+
+  // Base plate
+  const PLATE_W   = PLATE_HALF * 2 * STUD_SPACING;
+  const basePlate = new THREE.Mesh(
+    new THREE.BoxGeometry(PLATE_W, 1, PLATE_W),
+    new THREE.MeshLambertMaterial({ color: 0x2d8a2d })
+  );
+  basePlate.position.y = -0.5;
+  basePlate.receiveShadow = true;
+  basePlate.userData.isBase = true;
+  scene.add(basePlate);
+
+  // Subtle grid on plate surface
+  const grid = new THREE.GridHelper(PLATE_W, PLATE_HALF * 2, 0x1f6b1f, 0x1f6b1f);
+  grid.position.y = 0.005;
+  scene.add(grid);
+
+  // OrbitControls
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.07;
+  controls.minDistance   = 3;
+  controls.maxDistance   = 90;
+  controls.maxPolarAngle = Math.PI * 0.48;
+  controls.mouseButtons  = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+  });
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
+  // ── GEOMETRY FACTORY ────────────────────────────────────────────────────────
+  // Cached merged geometries (box body + stud cylinders). Cloned per brick so
+  // each brick can be independently disposed without affecting others.
+  const geoCache = new Map();
 
-    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-    camera.position.set(4, 4, 7);
-    camera.lookAt(0, 0, 0);
+  function getBrickGeo(cols, rows) {
+    const key = cols + 'x' + rows;
+    if (!geoCache.has(key)) {
+      const bW   = cols * STUD_SPACING - WALL_INSET * 2;
+      const bD   = rows * STUD_SPACING - WALL_INSET * 2;
+      const body = new THREE.BoxGeometry(bW, BRICK_HEIGHT, bD);
+      // Shift so local Y=0 is the bottom face of the brick body
+      body.translate(0, BRICK_HEIGHT / 2, 0);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    dirLight.position.set(5, 10, 7);
-    scene.add(dirLight);
-
-    const cubeGroup = new THREE.Group();
-    scene.add(cubeGroup);
-
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // ── CUBE CONSTRUCTION ──────────────────────────────────────────────────────
-    const cubies = [];
-
-    function makeMaterials(ix, iy, iz) {
-      return [
-        new THREE.MeshLambertMaterial({ color: ix ===  1 ? COLORS.BLUE   : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: ix === -1 ? COLORS.GREEN  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iy ===  1 ? COLORS.WHITE  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iy === -1 ? COLORS.YELLOW : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iz ===  1 ? COLORS.RED    : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iz === -1 ? COLORS.ORANGE : COLORS.BLACK }),
-      ];
-    }
-
-    (function createCubies() {
-      const geo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
-      for (let ix = -1; ix <= 1; ix++)
-        for (let iy = -1; iy <= 1; iy++)
-          for (let iz = -1; iz <= 1; iz++) {
-            const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz));
-            mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
-            cubeGroup.add(mesh);
-            cubies.push({ mesh });
-          }
-    })();
-
-    // ── SNAP TARGET QUATERNIONS ────────────────────────────────────────────────
-    // Precompute the cubeGroup quaternion that puts each face head-on to camera.
-
-    (function computeSnapTargets() {
-      const camDir = camera.position.clone().normalize();
-      // Build target frame: face normal → camDir, up → projected world-up
-      const worldUp = new THREE.Vector3(0, 1, 0);
-      const tRight = new THREE.Vector3().crossVectors(camDir, worldUp).normalize();
-      const tUp    = new THREE.Vector3().crossVectors(tRight, camDir).normalize();
-      // Target basis columns: (tRight, tUp, camDir)
-      const tgtMat = new THREE.Matrix4().makeBasis(tRight, tUp, camDir);
-
-      FACE_CONFIGS.forEach(fc => {
-        // Source basis columns for this face: (right, up, normal)
-        const srcMat = new THREE.Matrix4().makeBasis(fc.right, fc.up, fc.normal);
-        const combined = tgtMat.clone().multiply(srcMat.clone().invert());
-        fc.targetQuat = new THREE.Quaternion().setFromRotationMatrix(combined);
-      });
-    })();
-
-    // ── ARROW CONTROLS (dynamic, contextual) ─────────────────────────────────
-    const arrowMeshes = [];
-    const arrowToMove = new Map();
-    const arrows = { top: [], bottom: [], left: [], right: [] };
-
-    function makeArrowTexture(symbol) {
-      const c = document.createElement('canvas');
-      c.width = c.height = 128;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
-      ctx.beginPath();
-      ctx.arc(64, 64, 58, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.font = 'bold 80px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(symbol, 64, 70);
-      return new THREE.CanvasTexture(c);
-    }
-
-    (function createArrows() {
-      const geo = new THREE.PlaneGeometry(0.55, 0.55);
-      const symbols = { top: '\u25B2', bottom: '\u25BC', left: '\u25C4', right: '\u25BA' };
-      for (const edge of ['top', 'bottom', 'left', 'right']) {
-        for (let i = 0; i < 3; i++) {
-          const mat = new THREE.MeshBasicMaterial({
-            map: makeArrowTexture(symbols[edge]),
-            transparent: true,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-          });
-          const mesh = new THREE.Mesh(geo, mat);
-          mesh.visible = false;
-          cubeGroup.add(mesh);
-          arrows[edge].push(mesh);
-          arrowMeshes.push(mesh);
+      const geos = [body];
+      for (var c = 0; c < cols; c++) {
+        for (var r = 0; r < rows; r++) {
+          var cyl = new THREE.CylinderGeometry(STUD_RADIUS, STUD_RADIUS, STUD_HEIGHT, 16);
+          var lx  = (c - (cols - 1) / 2) * STUD_SPACING;
+          var lz  = (r - (rows - 1) / 2) * STUD_SPACING;
+          cyl.translate(lx, BRICK_HEIGHT + STUD_HEIGHT / 2, lz);
+          geos.push(cyl);
         }
       }
-    })();
+      var merged = THREE.BufferGeometryUtils.mergeBufferGeometries(geos);
+      merged.computeVertexNormals();
+      geoCache.set(key, merged);
+    }
+    return geoCache.get(key).clone();
+  }
 
-    // Position + map all 12 arrows around a given front face.
-    function positionArrows(fc) {
-      const { normal, up, right } = fc;
-      arrowToMove.clear();
+  // ── BRICK DATA ───────────────────────────────────────────────────────────────
+  //  gx, gz  = bottom-left stud grid coordinates (integers)
+  //  gy      = vertical layer (0 = on base plate)
+  //  Mesh world position: x/z center of footprint, y at bottom face world Y
+  var _nextId     = 0;
+  var brickMap    = new Map();   // id -> brick
+  var studGrid    = new Map();   // "gx,gy,gz" -> brick id
+  var brickMeshes = [];          // for raycasting
 
-      // Orient planes to face outward along the face normal.
-      const arrowQuat = new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1), normal
-      );
+  function studKey(gx, gy, gz) { return gx + ',' + gy + ',' + gz; }
 
-      // Determine axis letter and sign for the right/up directions.
-      const rLetter = right.x !== 0 ? 'x' : right.y !== 0 ? 'y' : 'z';
-      const rSign   = right[rLetter]; // +1 or -1
-      const uLetter = up.x    !== 0 ? 'x' : up.y    !== 0 ? 'y' : 'z';
-      const uSign   = up[uLetter];
+  function brickStuds(b) {
+    var arr = [];
+    for (var c = 0; c < b.cols; c++)
+      for (var r = 0; r < b.rows; r++)
+        arr.push([b.gx + c, b.gy, b.gz + r]);
+    return arr;
+  }
 
-      const cols = [-1, 0, 1];
-      const rows = [ 1, 0,-1];
+  function brickWorldPos(cols, rows, gx, gy, gz) {
+    return new THREE.Vector3(
+      (gx + (cols - 1) / 2) * STUD_SPACING,
+      gy * BRICK_HEIGHT,
+      (gz + (rows - 1) / 2) * STUD_SPACING
+    );
+  }
 
-      function place(mesh, pos, move) {
-        mesh.position.copy(pos);
-        mesh.quaternion.copy(arrowQuat);
-        mesh.visible = true;
-        arrowToMove.set(mesh, move);
+  function addBrick(cols, rows, color, gx, gy, gz) {
+    var id   = _nextId++;
+    var geo  = getBrickGeo(cols, rows);
+    var mat  = new THREE.MeshLambertMaterial({ color: color });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow    = true;
+    mesh.receiveShadow = true;
+    mesh.userData.brickId = id;
+    mesh.position.copy(brickWorldPos(cols, rows, gx, gy, gz));
+    scene.add(mesh);
+
+    var brick = { id: id, cols: cols, rows: rows, color: color, gx: gx, gy: gy, gz: gz, mesh: mesh };
+    brickMap.set(id, brick);
+    brickMeshes.push(mesh);
+    brickStuds(brick).forEach(function(s) { studGrid.set(studKey(s[0], s[1], s[2]), id); });
+    return brick;
+  }
+
+  function removeBrick(brick) {
+    if (!brick) return;
+    brickStuds(brick).forEach(function(s) { studGrid.delete(studKey(s[0], s[1], s[2])); });
+    brickMap.delete(brick.id);
+    var mi = brickMeshes.indexOf(brick.mesh);
+    if (mi >= 0) brickMeshes.splice(mi, 1);
+    scene.remove(brick.mesh);
+    brick.mesh.geometry.dispose();
+    brick.mesh.material.dispose();
+  }
+
+  function clearAll() {
+    Array.from(brickMap.values()).forEach(removeBrick);
+  }
+
+  // ── SNAP ENGINE ──────────────────────────────────────────────────────────────
+  // A placement is valid when:
+  //   1. All stud cells at layer gy are unoccupied.
+  //   2. At least one stud has support below (gy-1 occupied) OR gy===0.
+  //   3. All studs are within base plate bounds.
+  function isValid(cols, rows, gx, gy, gz) {
+    if (gy < 0) return false;
+    if (gx < -PLATE_HALF || gx + cols > PLATE_HALF) return false;
+    if (gz < -PLATE_HALF || gz + rows > PLATE_HALF) return false;
+
+    var hasSupport = (gy === 0);
+    for (var c = 0; c < cols; c++) {
+      for (var r = 0; r < rows; r++) {
+        if (studGrid.has(studKey(gx + c, gy, gz + r))) return false; // overlap
+        if (!hasSupport && gy > 0 && studGrid.has(studKey(gx + c, gy - 1, gz + r)))
+          hasSupport = true;
       }
-
-      // Top ▲ arrows — push column upward
-      cols.forEach((c, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(c))
-          .add(up.clone().multiplyScalar(1.8));
-        place(arrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
-      });
-
-      // Bottom ▼ arrows — push column downward
-      cols.forEach((c, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(c))
-          .add(up.clone().multiplyScalar(-1.8));
-        place(arrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
-      });
-
-      // Left ◄ arrows — push row leftward
-      rows.forEach((r, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(-1.8))
-          .add(up.clone().multiplyScalar(r));
-        place(arrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
-      });
-
-      // Right ► arrows — push row rightward
-      rows.forEach((r, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(1.8))
-          .add(up.clone().multiplyScalar(r));
-        place(arrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
-      });
     }
+    return hasSupport;
+  }
 
-    function updateArrows() {
-      const cur = cubeGroup.quaternion;
-      let bestDot = -1;
-      let bestFC  = null;
-      FACE_CONFIGS.forEach(fc => {
-        const d = Math.abs(cur.dot(fc.targetQuat));
-        if (d > bestDot) { bestDot = d; bestFC = fc; }
-      });
-      positionArrows(bestFC);
-    }
-
-    // ── MOVE ENGINE ────────────────────────────────────────────────────────────
-    const moveHistory = [];
-    const moveQueue   = [];
-    let   currentAnim = null;
-    let   animSpeed   = ANIM_SPEED_SCRAMBLE;
-
-    function getCubiesInLayer(axis, layer) {
-      return cubies.filter(c => Math.round(c.mesh.position[axis]) === layer);
-    }
-
-    function easeInOut(t) {
-      return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
-    }
-
-    function startMoveAnimation(move) {
-      const { axis, layer, dir } = move;
-      const layerCubies = getCubiesInLayer(axis, layer);
-
-      const pivot = new THREE.Group();
-      cubeGroup.add(pivot);
-      layerCubies.forEach(c => pivot.attach(c.mesh));
-
-      const startQuat = pivot.quaternion.clone();
-      const endQuat   = new THREE.Quaternion();
-      const axisVec   = new THREE.Vector3(
-        axis === 'x' ? 1 : 0,
-        axis === 'y' ? 1 : 0,
-        axis === 'z' ? 1 : 0,
-      );
-      endQuat.setFromAxisAngle(axisVec, dir * Math.PI / 2);
-
-      currentAnim = { pivot, startQuat, endQuat, progress: 0, cubies: layerCubies };
-    }
-
-    function finalizeMove() {
-      const { pivot, cubies: layerCubies } = currentAnim;
-      pivot.quaternion.copy(currentAnim.endQuat);
-      pivot.updateMatrixWorld();
-
-      layerCubies.forEach(c => {
-        cubeGroup.attach(c.mesh);
-        const p = c.mesh.position;
-        p.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
-      });
-      cubeGroup.remove(pivot);
-      currentAnim = null;
-    }
-
-    function processQueue() {
-      if (currentAnim || moveQueue.length === 0) return;
-      const move = moveQueue.shift();
-      startMoveAnimation(move);
-      updateButtons();
-    }
-
-    function enqueueMove(move, recordHistory) {
-      moveQueue.push(move);
-      if (recordHistory) moveHistory.push(move);
-    }
-
-    // ── SCRAMBLE / SOLVE ───────────────────────────────────────────────────────
-    const AXES   = ['x', 'y', 'z'];
-    const LAYERS = [-1, 0, 1];
-
-    function scramble(n) {
-      animSpeed = ANIM_SPEED_SCRAMBLE;
-      for (let i = 0; i < n; i++) {
-        enqueueMove({
-          axis:  AXES[Math.floor(Math.random() * 3)],
-          layer: LAYERS[Math.floor(Math.random() * 3)],
-          dir:   Math.random() < 0.5 ? 1 : -1,
-        }, true);
+  // Returns {gx, gy, gz} of best snap position, or null.
+  // Tries all (cols x rows) offsets so any stud can land under the cursor.
+  function findSnap(hitPoint, hitMesh, cols, rows) {
+    var gy = 0;
+    if (hitMesh && !hitMesh.userData.isBase) {
+      var hitId = hitMesh.userData.brickId;
+      if (hitId !== undefined) {
+        var hb = brickMap.get(hitId);
+        if (hb) gy = hb.gy + 1;
       }
-      updateButtons();
     }
 
-    function solve() {
-      if (moveHistory.length === 0) return;
-      animSpeed = ANIM_SPEED_SOLVE;
-      const solveMoves = moveHistory.slice().reverse().map(m => ({
-        axis: m.axis, layer: m.layer, dir: -m.dir,
-      }));
-      moveHistory.length = 0;
-      solveMoves.forEach(m => enqueueMove(m, false));
-      updateButtons();
-    }
+    var nearX = Math.round(hitPoint.x / STUD_SPACING);
+    var nearZ = Math.round(hitPoint.z / STUD_SPACING);
 
-    // ── ORBIT + CLICK DETECTION ────────────────────────────────────────────────
-    let isDragging   = false;
-    let pointerStart = null;
-    let prevPointer  = { x: 0, y: 0 };
-    const ROT_SPEED  = 0.005;
-
-    const raycaster = new THREE.Raycaster();
-    const mouse     = new THREE.Vector2();
-    let   hoveredArrow = null;
-
-    renderer.domElement.addEventListener('pointerdown', e => {
-      isDragging   = false;
-      pointerStart = { x: e.clientX, y: e.clientY };
-      prevPointer  = { x: e.clientX, y: e.clientY };
-    });
-
-    renderer.domElement.addEventListener('pointermove', e => {
-      const dx = e.clientX - prevPointer.x;
-      const dy = e.clientY - prevPointer.y;
-
-      if (pointerStart) {
-        const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
-        if (dist >= CLICK_THRESHOLD && !isDragging) {
-          isDragging = true;
-          arrowMeshes.forEach(m => { m.visible = false; });
+    var best = null, bestDSq = Infinity;
+    for (var dc = 0; dc < cols; dc++) {
+      for (var dr = 0; dr < rows; dr++) {
+        var gx = nearX - dc;
+        var gz = nearZ - dr;
+        if (isValid(cols, rows, gx, gy, gz)) {
+          var cx  = (gx + (cols - 1) / 2) * STUD_SPACING;
+          var cz  = (gz + (rows - 1) / 2) * STUD_SPACING;
+          var dSq = (hitPoint.x - cx) * (hitPoint.x - cx) + (hitPoint.z - cz) * (hitPoint.z - cz);
+          if (dSq < bestDSq) { bestDSq = dSq; best = { gx: gx, gy: gy, gz: gz }; }
         }
       }
+    }
+    return best;
+  }
 
-      if (isDragging) {
-        cubeGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dx * ROT_SPEED);
-        cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
-        cubeGroup.quaternion.normalize();
-      }
-      prevPointer = { x: e.clientX, y: e.clientY };
+  // ── GHOST BRICK ──────────────────────────────────────────────────────────────
+  var gCols = 2, gRows = 4;
+  var activeColor = LEGO_COLORS[0].hex;
 
-      // Hover highlight on arrow planes (only when not dragging)
-      if (!isDragging) {
-        mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
-        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(arrowMeshes);
-        const newHovered = hits.length > 0 ? hits[0].object : null;
-        if (newHovered !== hoveredArrow) {
-          if (hoveredArrow) hoveredArrow.scale.setScalar(1.0);
-          hoveredArrow = newHovered;
-          if (hoveredArrow) hoveredArrow.scale.setScalar(1.18);
-        }
-      }
-    });
+  var ghostMat = new THREE.MeshLambertMaterial({
+    color: activeColor, transparent: true, opacity: 0.38, depthWrite: false,
+  });
+  var ghost = new THREE.Mesh(getBrickGeo(gCols, gRows), ghostMat);
+  ghost.visible = false;
+  scene.add(ghost);
 
-    renderer.domElement.addEventListener('pointerup', e => {
-      const wasDrag = isDragging;
-      isDragging   = false;
-      pointerStart = null;
+  var snap = null;
 
-      if (wasDrag) {
-        // After drag → show arrows for nearest face (no snap animation)
-        updateArrows();
-      } else {
-        // Click → check for arrow hit
-        mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
-        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(arrowMeshes);
-        if (hits.length > 0) {
-          const move = arrowToMove.get(hits[0].object);
-          if (move && !currentAnim && moveQueue.length === 0) {
-            animSpeed = ANIM_SPEED_MANUAL;
-            enqueueMove(move, true);
-            updateButtons();
-          }
-        }
-      }
-    });
+  function rebuildGhost(cols, rows) {
+    gCols = cols; gRows = rows;
+    scene.remove(ghost);
+    ghost.geometry.dispose();
+    ghost = new THREE.Mesh(getBrickGeo(cols, rows), ghostMat);
+    ghost.visible = false;
+    scene.add(ghost);
+    snap = null;
+  }
 
-    renderer.domElement.addEventListener('pointerleave', () => {
-      isDragging   = false;
-      pointerStart = null;
-      if (hoveredArrow) { hoveredArrow.scale.setScalar(1.0); hoveredArrow = null; }
-    });
+  function refreshGhost(hitPoint, hitMesh) {
+    snap = findSnap(hitPoint, hitMesh, gCols, gRows);
+    if (snap) {
+      ghost.position.copy(brickWorldPos(gCols, gRows, snap.gx, snap.gy, snap.gz));
+      ghostMat.color.setHex(activeColor);
+      ghost.visible = true;
+    } else {
+      ghost.visible = false;
+    }
+  }
 
-    // ── UI ─────────────────────────────────────────────────────────────────────
-    const scrambleBtn = document.getElementById('scrambleBtn');
-    const solveBtn    = document.getElementById('solveBtn');
+  // ── RAYCASTING ───────────────────────────────────────────────────────────────
+  var raycaster = new THREE.Raycaster();
+  var ndcMouse  = new THREE.Vector2();
 
-    function updateButtons() {
-      const busy = currentAnim !== null || moveQueue.length > 0;
-      scrambleBtn.disabled = busy;
-      solveBtn.disabled    = busy || moveHistory.length === 0;
+  function toNDC(clientX, clientY) {
+    return new THREE.Vector2(
+      (clientX / window.innerWidth) * 2 - 1,
+      -(clientY / window.innerHeight) * 2 + 1
+    );
+  }
+
+  function rayHit(ndc, bricksOnly) {
+    raycaster.setFromCamera(ndc, camera);
+    var targets = bricksOnly ? brickMeshes : [basePlate].concat(brickMeshes);
+    var hits    = raycaster.intersectObjects(targets);
+    return hits.length ? hits[0] : null;
+  }
+
+  // ── INPUT ────────────────────────────────────────────────────────────────────
+  var pStart = null, pMoved = false;
+
+  renderer.domElement.addEventListener('pointermove', function(e) {
+    var ndc = toNDC(e.clientX, e.clientY);
+    ndcMouse.copy(ndc);
+
+    if (pStart) {
+      var dx = e.clientX - pStart.x, dy = e.clientY - pStart.y;
+      if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESH) pMoved = true;
     }
 
-    scrambleBtn.addEventListener('click', () => scramble(SCRAMBLE_MOVES));
-    solveBtn.addEventListener('click', solve);
-    updateButtons();
+    // Hide ghost while orbit-dragging so it does not float around distractingly
+    if (e.buttons === 1 && pMoved) { ghost.visible = false; return; }
+    // Skip ghost update during right/middle drag (pan / dolly)
+    if (e.buttons === 2 || e.buttons === 4) return;
 
-    // ── MAIN LOOP ──────────────────────────────────────────────────────────────
-    function tick() {
-      requestAnimationFrame(tick);
+    var hit = rayHit(ndc, false);
+    if (hit) refreshGhost(hit.point, hit.object);
+    else { ghost.visible = false; snap = null; }
+  });
 
-      // Move animation (rotates a single layer within cubeGroup)
-      if (currentAnim) {
-        currentAnim.progress += animSpeed;
-        const t = easeInOut(Math.min(currentAnim.progress, 1.0));
-        THREE.Quaternion.slerp(
-          currentAnim.startQuat,
-          currentAnim.endQuat,
-          currentAnim.pivot.quaternion,
-          t,
-        );
+  renderer.domElement.addEventListener('pointerdown', function(e) {
+    pStart = { x: e.clientX, y: e.clientY };
+    pMoved = false;
+  });
 
-        if (currentAnim.progress >= 1.0) {
-          finalizeMove();
-          updateButtons();
-          processQueue();
-        }
-      } else {
-        processQueue();
-      }
+  renderer.domElement.addEventListener('pointerup', function(e) {
+    if (!pStart) return;
+    var moved = pMoved;
+    pStart = null; pMoved = false;
 
-      renderer.render(scene, camera);
+    if (e.button === 0 && !moved && snap) {
+      addBrick(gCols, gRows, activeColor, snap.gx, snap.gy, snap.gz);
+      var hit = rayHit(ndcMouse, false);
+      if (hit) refreshGhost(hit.point, hit.object);
+      else { ghost.visible = false; snap = null; }
     }
+  });
 
-    // Show arrows for the initial orientation before any drag.
-    updateArrows();
+  renderer.domElement.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    var ndc = toNDC(e.clientX, e.clientY);
+    var hit = rayHit(ndc, true);
+    if (hit) {
+      var id    = hit.object.userData.brickId;
+      var brick = brickMap.get(id);
+      if (brick) {
+        removeBrick(brick);
+        var h2 = rayHit(ndc, false);
+        if (h2) refreshGhost(h2.point, h2.object);
+        else { ghost.visible = false; snap = null; }
+      }
+    }
+  });
 
-    tick();
+  // ── UI ───────────────────────────────────────────────────────────────────────
+  var sizeBar = document.getElementById('sizeBar');
+  BRICK_SIZES.forEach(function(s, i) {
+    var btn = document.createElement('button');
+    btn.className = 'size-btn' + (i === 5 ? ' active' : '');
+    btn.textContent = s.label;
+    btn.addEventListener('click', function() {
+      sizeBar.querySelectorAll('.size-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      rebuildGhost(s.cols, s.rows);
+    });
+    sizeBar.appendChild(btn);
+  });
+
+  var colorBar = document.getElementById('colorBar');
+  LEGO_COLORS.forEach(function(c, i) {
+    var sw = document.createElement('div');
+    sw.className = 'color-sw' + (i === 0 ? ' active' : '');
+    sw.style.background = '#' + c.hex.toString(16).padStart(6, '0');
+    sw.title = c.name;
+    sw.addEventListener('click', function() {
+      colorBar.querySelectorAll('.color-sw').forEach(function(s) { s.classList.remove('active'); });
+      sw.classList.add('active');
+      activeColor = c.hex;
+      ghostMat.color.setHex(activeColor);
+    });
+    colorBar.appendChild(sw);
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', function() {
+    clearAll();
+    ghost.visible = false;
+    snap = null;
+  });
+
+  // ── RENDER LOOP ──────────────────────────────────────────────────────────────
+  (function tick() {
+    requestAnimationFrame(tick);
+    controls.update();
+    renderer.render(scene, camera);
   })();
-  </script>
+
+})();
+</script>
 </body>
 </html>
