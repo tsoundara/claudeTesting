@@ -35,6 +35,33 @@
     #dmBtn:hover:not(:disabled) { background: #9b59b6; }
     #dmBtn.active { background: #c0392b; }
     #dmBtn.active:hover:not(:disabled) { background: #e74c3c; }
+    #schemeControl {
+      display: flex;
+      gap: 8px;
+      background: #222;
+      border-radius: 8px;
+      padding: 8px 10px;
+      align-items: center;
+    }
+    #schemeControl span {
+      color: #888;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    .swatch {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      cursor: pointer;
+      padding: 0;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .swatch:hover { transform: scale(1.12); }
+    .swatch.active { border-color: #fff; transform: scale(1.18); }
     #sizeControl {
       display: flex;
       align-items: center;
@@ -77,13 +104,22 @@
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
     <button id="dmBtn">Take Apart</button>
+    <div id="schemeControl">
+      <span>Color</span>
+      <button class="swatch active" data-scheme="0" title="Classic"
+        style="background:linear-gradient(135deg,#1155ee 33%,#ee1111 33% 66%,#ffffff 66%)"></button>
+      <button class="swatch" data-scheme="1" title="Pastel"
+        style="background:linear-gradient(135deg,#6EC6F5 33%,#FF9AA2 33% 66%,#77DD77 66%)"></button>
+      <button class="swatch" data-scheme="2" title="Neon"
+        style="background:linear-gradient(135deg,#00FFFF 33%,#FF073A 33% 66%,#39FF14 66%)"></button>
+    </div>
     <div id="sizeControl">
       <button id="sizeMinusBtn">−</button>
       <span id="sizeLabel">3×3</span>
       <button id="sizePlusBtn">+</button>
     </div>
   </div>
-  <div id="hint">Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers</div>
+  <div id="hint">Drag empty space to orbit &nbsp;|&nbsp; Drag a layer to rotate it</div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script>
   (function () {
@@ -116,15 +152,6 @@
     const MIN_SIZE        = 2;
     const MAX_SIZE        = 6;
 
-    // 6 face configs: local normal/up/right for each cube face.
-    const FACE_CONFIGS = [
-      { normal: new THREE.Vector3( 0, 0, 1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 1, 0, 0) },
-      { normal: new THREE.Vector3( 0, 0,-1), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3(-1, 0, 0) },
-      { normal: new THREE.Vector3( 1, 0, 0), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 0, 0,-1) },
-      { normal: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3( 0, 1, 0), right: new THREE.Vector3( 0, 0, 1) },
-      { normal: new THREE.Vector3( 0, 1, 0), up: new THREE.Vector3( 0, 0,-1), right: new THREE.Vector3( 1, 0, 0) },
-      { normal: new THREE.Vector3( 0,-1, 0), up: new THREE.Vector3( 0, 0, 1), right: new THREE.Vector3( 1, 0, 0) },
-    ];
 
     // ── THREE.JS SETUP ─────────────────────────────────────────────────────────
     const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -153,22 +180,6 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // ── SNAP TARGET QUATERNIONS ────────────────────────────────────────────────
-    // Precompute the cubeGroup quaternion that puts each face head-on to camera.
-    // Camera direction stays constant across sizes (only distance changes), so
-    // these only need to be computed once.
-    (function computeSnapTargets() {
-      const camDir = camera.position.clone().normalize();
-      const worldUp = new THREE.Vector3(0, 1, 0);
-      const tRight = new THREE.Vector3().crossVectors(camDir, worldUp).normalize();
-      const tUp    = new THREE.Vector3().crossVectors(tRight, camDir).normalize();
-      const tgtMat = new THREE.Matrix4().makeBasis(tRight, tUp, camDir);
-      FACE_CONFIGS.forEach(fc => {
-        const srcMat  = new THREE.Matrix4().makeBasis(fc.right, fc.up, fc.normal);
-        const combined = tgtMat.clone().multiply(srcMat.clone().invert());
-        fc.targetQuat = new THREE.Quaternion().setFromRotationMatrix(combined);
-      });
-    })();
 
     // ── CUBE STATE ─────────────────────────────────────────────────────────────
     let cubeSize = 3;
@@ -182,13 +193,14 @@
 
     function makeMaterials(ix, iy, iz, N) {
       const e = (N - 1) / 2;
+      const s = COLOR_SCHEMES[schemeIdx];
       return [
-        new THREE.MeshLambertMaterial({ color: Math.abs(ix - e) < 0.1 ? COLORS.BLUE   : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(ix + e) < 0.1 ? COLORS.GREEN  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iy - e) < 0.1 ? COLORS.WHITE  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iy + e) < 0.1 ? COLORS.YELLOW : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iz - e) < 0.1 ? COLORS.RED    : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iz + e) < 0.1 ? COLORS.ORANGE : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix - e) < 0.1 ? s.right  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix + e) < 0.1 ? s.left   : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy - e) < 0.1 ? s.top    : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy + e) < 0.1 ? s.bottom : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz - e) < 0.1 ? s.front  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz + e) < 0.1 ? s.back   : COLORS.BLACK }),
       ];
     }
 
@@ -203,137 +215,139 @@
             const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz, N));
             mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
             cubeGroup.add(mesh);
-            cubies.push({ mesh });
+            cubies.push({ mesh, hx: ix, hy: iy, hz: iz });
           }
     }
 
-    // ── ARROW CONTROLS ─────────────────────────────────────────────────────────
-    let arrowMeshes   = [];
-    let currentArrows = { top: [], bottom: [], left: [], right: [] };
-    const arrowToMove = new Map();
-
-    // Pre-render arrow textures once; reused across all sizes.
-    const arrowTextures = (() => {
-      function make(symbol) {
-        const c = document.createElement('canvas');
-        c.width = c.height = 128;
-        const ctx = c.getContext('2d');
-        // Dark backing circle — contrasts against both the black scene and
-        // any coloured cube face.
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.beginPath();
-        ctx.arc(64, 64, 58, 0, Math.PI * 2);
-        ctx.fill();
-        // Solid white arrow with a subtle dark shadow for extra pop.
-        ctx.shadowColor   = 'rgba(0,0,0,0.9)';
-        ctx.shadowBlur    = 8;
-        ctx.fillStyle     = '#00e5ff';
-        ctx.font          = 'bold 84px sans-serif';
-        ctx.textAlign     = 'center';
-        ctx.textBaseline  = 'middle';
-        ctx.fillText(symbol, 64, 70);
-        return new THREE.CanvasTexture(c);
-      }
-      return {
-        top:    make('\u25B2'),
-        bottom: make('\u25BC'),
-        left:   make('\u25C4'),
-        right:  make('\u25BA'),
-      };
-    })();
-
-    function rebuildArrows(N) {
-      arrowMeshes.forEach(m => cubeGroup.remove(m));
-      arrowMeshes   = [];
-      arrowToMove.clear();
-      currentArrows = { top: [], bottom: [], left: [], right: [] };
-
-      // Shrink arrow size for larger cubes so they don't crowd each other.
-      const arrowSize = Math.min(0.90, 0.55 * N / 3);
-      const geo = new THREE.PlaneGeometry(arrowSize, arrowSize);
-
-      for (const edge of ['top', 'bottom', 'left', 'right']) {
-        for (let i = 0; i < N; i++) {
-          const mat  = new THREE.MeshBasicMaterial({
-            map: arrowTextures[edge],
-            transparent: true,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-          });
-          const mesh = new THREE.Mesh(geo, mat);
-          mesh.visible = false;
-          cubeGroup.add(mesh);
-          currentArrows[edge].push(mesh);
-          arrowMeshes.push(mesh);
-        }
-      }
+    function applyScheme(N) {
+      const e = (N - 1) / 2;
+      const s = COLOR_SCHEMES[schemeIdx];
+      cubies.forEach(c => {
+        c.mesh.material[0].color.setHex(Math.abs(c.hx - e) < 0.1 ? s.right  : COLORS.BLACK);
+        c.mesh.material[1].color.setHex(Math.abs(c.hx + e) < 0.1 ? s.left   : COLORS.BLACK);
+        c.mesh.material[2].color.setHex(Math.abs(c.hy - e) < 0.1 ? s.top    : COLORS.BLACK);
+        c.mesh.material[3].color.setHex(Math.abs(c.hy + e) < 0.1 ? s.bottom : COLORS.BLACK);
+        c.mesh.material[4].color.setHex(Math.abs(c.hz - e) < 0.1 ? s.front  : COLORS.BLACK);
+        c.mesh.material[5].color.setHex(Math.abs(c.hz + e) < 0.1 ? s.back   : COLORS.BLACK);
+      });
+      document.querySelectorAll('.swatch').forEach((sw, i) => sw.classList.toggle('active', i === schemeIdx));
     }
 
-    function positionArrows(fc) {
-      const { normal, up, right } = fc;
-      arrowToMove.clear();
+    // ── LAYER DRAG CONSTANTS & STATE ──────────────────────────────────────────
+    const RADIANS_PER_PIXEL = Math.PI / 150;
+    const SNAP_ANIM_SPEED   = 0.12;
+    const LAYER_HINT_COLOR  = 0x00e5ff;
 
-      const arrowQuat = new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1), normal
+    let hoverHighlight = null;
+    let hoverHitCubie  = null;
+    let hoverAxis      = null;
+    let hoverLayerPos  = null;
+    let potentialLayerGrab = null;
+    let layerDrag          = null;
+
+    // ── HOVER HIGHLIGHT ────────────────────────────────────────────────────────
+    function buildHoverHighlight() {
+      if (hoverHighlight) { cubeGroup.remove(hoverHighlight); hoverHighlight = null; }
+      const geo = new THREE.BoxGeometry(1, 1, 1);
+      const edges = new THREE.EdgesGeometry(geo);
+      hoverHighlight = new THREE.LineSegments(edges,
+        new THREE.LineBasicMaterial({ color: LAYER_HINT_COLOR, transparent: true, opacity: 0.85 }));
+      hoverHighlight.visible = false;
+      cubeGroup.add(hoverHighlight);
+    }
+
+    function updateHoverHighlight(axis, layerPos) {
+      const span = (cubeSize - 1) * CUBIE_GAP + CUBIE_SIZE;
+      const thin = CUBIE_SIZE * 1.05;
+      hoverHighlight.scale.set(
+        axis === 'x' ? thin : span,
+        axis === 'y' ? thin : span,
+        axis === 'z' ? thin : span,
+      );
+      hoverHighlight.position.set(
+        axis === 'x' ? layerPos * CUBIE_GAP : 0,
+        axis === 'y' ? layerPos * CUBIE_GAP : 0,
+        axis === 'z' ? layerPos * CUBIE_GAP : 0,
+      );
+      hoverHighlight.visible = true;
+    }
+
+    function hideHoverHighlight() {
+      if (hoverHighlight) hoverHighlight.visible = false;
+      hoverHitCubie = null; hoverAxis = null; hoverLayerPos = null;
+    }
+
+    // ── LAYER DRAG FUNCTIONS ───────────────────────────────────────────────────
+    function startLayerDrag(cubie, hit, totalDx, totalDy) {
+      hideHoverHighlight();
+
+      // Face normal in cubeGroup local space
+      const localFaceNormal = hit.face.normal.clone()
+        .applyMatrix4(hit.object.matrixWorld)
+        .applyMatrix4(cubeGroup.matrixWorld.clone().invert());
+      ['x', 'y', 'z'].forEach(a => localFaceNormal[a] = Math.round(localFaceNormal[a]));
+
+      // Camera axes in cubeGroup local space
+      const invCubeMat = cubeGroup.matrixWorld.clone().invert();
+      const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
+        .transformDirection(invCubeMat);
+      const camUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+        .transformDirection(invCubeMat);
+
+      // Screen drag vector in cubeGroup local 3D space
+      const localDrag = camRight.clone().multiplyScalar(totalDx)
+        .addScaledVector(camUp, -totalDy);
+
+      // Rotation axis = drag direction × face normal
+      const rawRotAxis = new THREE.Vector3().crossVectors(localDrag, localFaceNormal);
+      const axisLetter = ['x', 'y', 'z'].reduce((best, a) =>
+        Math.abs(rawRotAxis[a]) > Math.abs(rawRotAxis[best]) ? a : best, 'x');
+      const sign = rawRotAxis[axisLetter] >= 0 ? 1 : -1;
+      const axisVec = new THREE.Vector3(
+        axisLetter === 'x' ? 1 : 0,
+        axisLetter === 'y' ? 1 : 0,
+        axisLetter === 'z' ? 1 : 0,
       );
 
-      const rLetter = right.x !== 0 ? 'x' : right.y !== 0 ? 'y' : 'z';
-      const rSign   = right[rLetter];
-      const uLetter = up.x    !== 0 ? 'x' : up.y    !== 0 ? 'y' : 'z';
-      const uSign   = up[uLetter];
+      const layerPos = Math.round(cubie.mesh.position[axisLetter] * 2) / 2;
+      const screenDragAxis = Math.abs(totalDx) >= Math.abs(totalDy) ? 'x' : 'y';
 
-      const layers    = getLayers(cubeSize);
-      // Distance from cube centre to the arrow row/column perimeter.
-      const perimDist = (cubeSize - 1) / 2 + 0.8;
+      const layerCubies = getCubiesInLayer(axisLetter, layerPos);
+      const pivot = new THREE.Group();
+      cubeGroup.add(pivot);
+      layerCubies.forEach(c => pivot.attach(c.mesh));
 
-      function place(mesh, pos, move) {
-        mesh.position.copy(pos);
-        mesh.quaternion.copy(arrowQuat);
-        mesh.visible = true;
-        arrowToMove.set(mesh, move);
-      }
-
-      // Top ▲ — one per column, push column upward
-      layers.forEach((c, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(c))
-          .add(up.clone().multiplyScalar(perimDist));
-        place(currentArrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
-      });
-
-      // Bottom ▼ — one per column, push column downward
-      layers.forEach((c, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(c))
-          .add(up.clone().multiplyScalar(-perimDist));
-        place(currentArrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
-      });
-
-      // Left ◄ — one per row, push row leftward (displayed top-to-bottom)
-      [...layers].reverse().forEach((r, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(-perimDist))
-          .add(up.clone().multiplyScalar(r));
-        place(currentArrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
-      });
-
-      // Right ► — one per row, push row rightward
-      [...layers].reverse().forEach((r, i) => {
-        const pos = normal.clone().multiplyScalar(0.1)
-          .add(right.clone().multiplyScalar(perimDist))
-          .add(up.clone().multiplyScalar(r));
-        place(currentArrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
-      });
+      layerDrag = { pivot, layerCubies, axisLetter, axisVec, layerPos, screenDragAxis, sign, currentAngle: 0 };
     }
 
-    function updateArrows() {
-      const cur = cubeGroup.quaternion;
-      let bestDot = -1, bestFC = null;
-      FACE_CONFIGS.forEach(fc => {
-        const d = Math.abs(cur.dot(fc.targetQuat));
-        if (d > bestDot) { bestDot = d; bestFC = fc; }
-      });
-      positionArrows(bestFC);
+    function updateLayerDrag(dx, dy) {
+      const delta = layerDrag.screenDragAxis === 'x' ? dx : -dy;
+      layerDrag.currentAngle += delta * RADIANS_PER_PIXEL * layerDrag.sign;
+      layerDrag.pivot.quaternion.setFromAxisAngle(layerDrag.axisVec, layerDrag.currentAngle);
+    }
+
+    function endLayerDrag() {
+      if (!layerDrag) return;
+      const { pivot, layerCubies, axisLetter, axisVec, layerPos, currentAngle } = layerDrag;
+      layerDrag = null;
+
+      const snappedAngle  = Math.round(currentAngle / (Math.PI / 2)) * (Math.PI / 2);
+      const quarterTurns  = Math.round(snappedAngle / (Math.PI / 2));
+
+      // Record history
+      if (quarterTurns !== 0) {
+        const dir = quarterTurns > 0 ? 1 : -1;
+        for (let i = 0; i < Math.abs(quarterTurns); i++) {
+          moveHistory.push({ axis: axisLetter, layer: layerPos, dir });
+        }
+      }
+
+      // Hand to SLERP snap animation
+      const startQuat = pivot.quaternion.clone();
+      const endQuat   = new THREE.Quaternion().setFromAxisAngle(axisVec, snappedAngle);
+      animSpeed   = SNAP_ANIM_SPEED;
+      currentAnim = { pivot, startQuat, endQuat, progress: 0, cubies: layerCubies };
+      updateButtons();
     }
 
     // ── MOVE ENGINE ────────────────────────────────────────────────────────────
@@ -404,6 +418,8 @@
     const AXES = ['x', 'y', 'z'];
 
     function scramble() {
+      hideHoverHighlight();
+      potentialLayerGrab = null;
       const layers = getLayers(cubeSize);
       // Scale move count with cube complexity.
       const n = cubeSize * cubeSize * 2;
@@ -420,6 +436,8 @@
 
     function solve() {
       if (moveHistory.length === 0) return;
+      hideHoverHighlight();
+      potentialLayerGrab = null;
       animSpeed = ANIM_SPEED_SOLVE;
       const solveMoves = moveHistory.slice().reverse().map(m => ({
         axis: m.axis, layer: m.layer, dir: -m.dir,
@@ -614,7 +632,8 @@
 
     function enterDM() {
       disassembleMode = true;
-      arrowMeshes.forEach(m => m.visible = false);
+      hideHoverHighlight();
+      potentialLayerGrab = null;
       dmSlots.length = 0;
       cubies.forEach((c, i) => {
         c.isFloating = false;
@@ -652,10 +671,9 @@
       dmGhosts.forEach(m => cubeGroup.remove(m));
       dmGhosts = []; dmSlots.length = 0;
       disassembleMode = false;
-      document.getElementById('hint').innerHTML = 'Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers';
+      document.getElementById('hint').innerHTML = 'Drag empty space to orbit &nbsp;|&nbsp; Drag a layer to rotate it';
       document.getElementById('dmBtn').textContent = 'Take Apart';
       document.getElementById('dmBtn').classList.remove('active');
-      updateArrows();
       updateButtons();
     }
 
@@ -666,23 +684,24 @@
       moveQueue.length   = 0;
       moveHistory.length = 0;
       currentAnim        = null;
+      layerDrag          = null;
+      potentialLayerGrab = null;
       cubeGroup.quaternion.identity();
-      if (hoveredArrow) { hoveredArrow.scale.setScalar(1.0); hoveredArrow = null; }
 
       buildCube(N);
-      rebuildArrows(N);
+      buildHoverHighlight();
+      hideHoverHighlight();
 
       // Scale camera distance with cube size, keeping the same view angle.
       const d = 3.5 + N * 1.5;
       camera.position.set(d * 4 / 7, d * 4 / 7, d);
       camera.lookAt(0, 0, 0);
 
-      updateArrows();
       updateSizeLabel();
       updateButtons();
     }
 
-    // ── ORBIT + CLICK DETECTION ────────────────────────────────────────────────
+    // ── ORBIT + LAYER DRAG ─────────────────────────────────────────────────────
     let isDragging   = false;
     let pointerStart = null;
     let prevPointer  = { x: 0, y: 0 };
@@ -690,7 +709,6 @@
 
     const raycaster = new THREE.Raycaster();
     const mouse     = new THREE.Vector2();
-    let   hoveredArrow = null;
 
     renderer.domElement.addEventListener('pointerdown', e => {
       isDragging   = false;
@@ -705,6 +723,18 @@
         dmPotentialGrab = hits.length > 0
           ? { cubie: cubies.find(c => c.mesh === hits[0].object), worldHitPoint: hits[0].point.clone() }
           : null;
+        return;
+      }
+
+      // Normal mode: check for cubie hit to set up potential layer grab
+      if (!currentAnim && moveQueue.length === 0) {
+        mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObjects(cubies.map(c => c.mesh));
+        if (hits.length > 0) {
+          potentialLayerGrab = { cubie: cubies.find(c => c.mesh === hits[0].object), hit: hits[0] };
+        }
       }
     });
 
@@ -739,11 +769,37 @@
       }
 
       // ── Normal mode ──
+
+      // Active layer drag
+      if (layerDrag) {
+        updateLayerDrag(dx, dy);
+        return;
+      }
+
+      // Check if potential layer grab threshold exceeded
+      if (potentialLayerGrab && pointerStart) {
+        const totalDx = e.clientX - pointerStart.x;
+        const totalDy = e.clientY - pointerStart.y;
+        if (Math.hypot(totalDx, totalDy) >= CLICK_THRESHOLD) {
+          if (!currentAnim && moveQueue.length === 0) {
+            startLayerDrag(potentialLayerGrab.cubie, potentialLayerGrab.hit, totalDx, totalDy);
+            potentialLayerGrab = null;
+            return;
+          } else {
+            potentialLayerGrab = null;
+            // fall through to orbit
+          }
+        } else {
+          return;  // under threshold, wait
+        }
+      }
+
+      // Orbit drag
       if (pointerStart) {
         const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
         if (dist >= CLICK_THRESHOLD && !isDragging) {
           isDragging = true;
-          arrowMeshes.forEach(m => { m.visible = false; });
+          hideHoverHighlight();
         }
       }
       if (isDragging) {
@@ -751,16 +807,29 @@
         cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
         cubeGroup.quaternion.normalize();
       }
-      if (!isDragging) {
+
+      // Hover highlight when idle
+      if (!isDragging && !currentAnim && moveQueue.length === 0) {
         mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(arrowMeshes);
-        const newHov = hits.length > 0 ? hits[0].object : null;
-        if (newHov !== hoveredArrow) {
-          if (hoveredArrow) hoveredArrow.scale.setScalar(1.0);
-          hoveredArrow = newHov;
-          if (hoveredArrow) hoveredArrow.scale.setScalar(1.18);
+        const hits = raycaster.intersectObjects(cubies.map(c => c.mesh));
+        if (hits.length > 0) {
+          const hit   = hits[0];
+          const cubie = cubies.find(c => c.mesh === hit.object);
+          const localNormal = hit.face.normal.clone()
+            .applyMatrix4(hit.object.matrixWorld)
+            .applyMatrix4(cubeGroup.matrixWorld.clone().invert());
+          ['x', 'y', 'z'].forEach(a => localNormal[a] = Math.round(localNormal[a]));
+          const axis = ['x', 'y', 'z'].reduce((best, a) =>
+            Math.abs(localNormal[a]) > Math.abs(localNormal[best]) ? a : best, 'x');
+          const lp = Math.round(cubie.mesh.position[axis] * 2) / 2;
+          if (cubie !== hoverHitCubie || axis !== hoverAxis || lp !== hoverLayerPos) {
+            hoverHitCubie = cubie; hoverAxis = axis; hoverLayerPos = lp;
+            updateHoverHighlight(axis, lp);
+          }
+        } else {
+          hideHoverHighlight();
         }
       }
     });
@@ -777,31 +846,19 @@
         return;
       }
 
-      if (wasDrag) {
-        updateArrows();
-      } else {
-        mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
-        mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-        const hits = raycaster.intersectObjects(arrowMeshes);
-        if (hits.length > 0) {
-          const move = arrowToMove.get(hits[0].object);
-          if (move && !currentAnim && moveQueue.length === 0) {
-            animSpeed = ANIM_SPEED_MANUAL;
-            enqueueMove(move, true);
-            updateButtons();
-          }
-        }
-      }
+      if (layerDrag) { endLayerDrag(); }
+      potentialLayerGrab = null;
     });
 
     renderer.domElement.addEventListener('pointerleave', () => {
+      if (layerDrag) endLayerDrag();
+      hideHoverHighlight();
+      potentialLayerGrab = null;
       if (dmDragCubie) dmEndDrag();
       if (dmHoveredCubie) { dmHoveredCubie.mesh.scale.setScalar(1); dmHoveredCubie = null; }
       dmPotentialGrab = null;
       isDragging   = false;
       pointerStart = null;
-      if (hoveredArrow) { hoveredArrow.scale.setScalar(1.0); hoveredArrow = null; }
     });
 
     // ── UI ─────────────────────────────────────────────────────────────────────
@@ -817,7 +874,7 @@
     }
 
     function updateButtons() {
-      const busy = currentAnim !== null || moveQueue.length > 0;
+      const busy = currentAnim !== null || moveQueue.length > 0 || layerDrag !== null;
       scrambleBtn.disabled  = busy || disassembleMode;
       solveBtn.disabled     = busy || moveHistory.length === 0 || disassembleMode;
       dmBtn.disabled        = busy;
@@ -830,6 +887,12 @@
     dmBtn.addEventListener('click', () => { if (disassembleMode) exitDM(); else enterDM(); });
     sizeMinusBtn.addEventListener('click', () => { if (cubeSize > MIN_SIZE) initCube(cubeSize - 1); });
     sizePlusBtn.addEventListener('click',  () => { if (cubeSize < MAX_SIZE) initCube(cubeSize + 1); });
+    document.querySelectorAll('.swatch').forEach(sw => {
+      sw.addEventListener('click', () => {
+        schemeIdx = parseInt(sw.dataset.scheme);
+        applyScheme(cubeSize);
+      });
+    });
 
     // ── MAIN LOOP ──────────────────────────────────────────────────────────────
     function tick() {
