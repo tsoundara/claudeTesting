@@ -35,6 +35,33 @@
     #dmBtn:hover:not(:disabled) { background: #9b59b6; }
     #dmBtn.active { background: #c0392b; }
     #dmBtn.active:hover:not(:disabled) { background: #e74c3c; }
+    #schemeControl {
+      display: flex;
+      gap: 8px;
+      background: #222;
+      border-radius: 8px;
+      padding: 8px 10px;
+      align-items: center;
+    }
+    #schemeControl span {
+      color: #888;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    .swatch {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 3px solid transparent;
+      cursor: pointer;
+      padding: 0;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .swatch:hover { transform: scale(1.12); }
+    .swatch.active { border-color: #fff; transform: scale(1.18); }
     #sizeControl {
       display: flex;
       align-items: center;
@@ -77,6 +104,15 @@
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
     <button id="dmBtn">Take Apart</button>
+    <div id="schemeControl">
+      <span>Color</span>
+      <button class="swatch active" data-scheme="0" title="Classic"
+        style="background:linear-gradient(135deg,#1155ee 33%,#ee1111 33% 66%,#ffffff 66%)"></button>
+      <button class="swatch" data-scheme="1" title="Pastel"
+        style="background:linear-gradient(135deg,#6EC6F5 33%,#FF9AA2 33% 66%,#77DD77 66%)"></button>
+      <button class="swatch" data-scheme="2" title="Neon"
+        style="background:linear-gradient(135deg,#00FFFF 33%,#FF073A 33% 66%,#39FF14 66%)"></button>
+    </div>
     <div id="sizeControl">
       <button id="sizeMinusBtn">−</button>
       <span id="sizeLabel">3×3</span>
@@ -97,6 +133,16 @@
       GREEN:  0x22aa22,
       BLACK:  0x111111,
     };
+    const COLOR_SCHEMES = [
+      // Classic
+      { right: 0x1155ee, left: 0x22aa22, top: 0xffffff, bottom: 0xffdd00, front: 0xee1111, back: 0xff8800 },
+      // Pastel
+      { right: 0x6EC6F5, left: 0x77DD77, top: 0xFFFFFF, bottom: 0xFFDAB9, front: 0xFF9AA2, back: 0xB39DDB },
+      // Neon
+      { right: 0x00FFFF, left: 0x39FF14, top: 0xFFFFFF, bottom: 0xFFFF00, front: 0xFF073A, back: 0xFF6600 },
+    ];
+    let schemeIdx = 0;
+
     const ANIM_SPEED_SCRAMBLE = 0.08;
     const ANIM_SPEED_MANUAL   = 0.05;
     const ANIM_SPEED_SOLVE    = 0.05;
@@ -172,13 +218,14 @@
 
     function makeMaterials(ix, iy, iz, N) {
       const e = (N - 1) / 2;
+      const s = COLOR_SCHEMES[schemeIdx];
       return [
-        new THREE.MeshLambertMaterial({ color: Math.abs(ix - e) < 0.1 ? COLORS.BLUE   : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(ix + e) < 0.1 ? COLORS.GREEN  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iy - e) < 0.1 ? COLORS.WHITE  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iy + e) < 0.1 ? COLORS.YELLOW : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iz - e) < 0.1 ? COLORS.RED    : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: Math.abs(iz + e) < 0.1 ? COLORS.ORANGE : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix - e) < 0.1 ? s.right  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix + e) < 0.1 ? s.left   : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy - e) < 0.1 ? s.top    : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy + e) < 0.1 ? s.bottom : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz - e) < 0.1 ? s.front  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz + e) < 0.1 ? s.back   : COLORS.BLACK }),
       ];
     }
 
@@ -193,8 +240,22 @@
             const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz, N));
             mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
             cubeGroup.add(mesh);
-            cubies.push({ mesh });
+            cubies.push({ mesh, hx: ix, hy: iy, hz: iz });
           }
+    }
+
+    function applyScheme(N) {
+      const e = (N - 1) / 2;
+      const s = COLOR_SCHEMES[schemeIdx];
+      cubies.forEach(c => {
+        c.mesh.material[0].color.setHex(Math.abs(c.hx - e) < 0.1 ? s.right  : COLORS.BLACK);
+        c.mesh.material[1].color.setHex(Math.abs(c.hx + e) < 0.1 ? s.left   : COLORS.BLACK);
+        c.mesh.material[2].color.setHex(Math.abs(c.hy - e) < 0.1 ? s.top    : COLORS.BLACK);
+        c.mesh.material[3].color.setHex(Math.abs(c.hy + e) < 0.1 ? s.bottom : COLORS.BLACK);
+        c.mesh.material[4].color.setHex(Math.abs(c.hz - e) < 0.1 ? s.front  : COLORS.BLACK);
+        c.mesh.material[5].color.setHex(Math.abs(c.hz + e) < 0.1 ? s.back   : COLORS.BLACK);
+      });
+      document.querySelectorAll('.swatch').forEach((sw, i) => sw.classList.toggle('active', i === schemeIdx));
     }
 
     // ── ARROW CONTROLS ─────────────────────────────────────────────────────────
@@ -797,6 +858,12 @@
     dmBtn.addEventListener('click', () => { if (disassembleMode) exitDM(); else enterDM(); });
     sizeMinusBtn.addEventListener('click', () => { if (cubeSize > MIN_SIZE) initCube(cubeSize - 1); });
     sizePlusBtn.addEventListener('click',  () => { if (cubeSize < MAX_SIZE) initCube(cubeSize + 1); });
+    document.querySelectorAll('.swatch').forEach(sw => {
+      sw.addEventListener('click', () => {
+        schemeIdx = parseInt(sw.dataset.scheme);
+        applyScheme(cubeSize);
+      });
+    });
 
     // ── MAIN LOOP ──────────────────────────────────────────────────────────────
     function tick() {
