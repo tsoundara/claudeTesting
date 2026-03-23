@@ -97,6 +97,16 @@
       GREEN:  0x22aa22,
       BLACK:  0x111111,
     };
+    const COLOR_SCHEMES = [
+      // Classic
+      { right: 0x1155ee, left: 0x22aa22, top: 0xffffff, bottom: 0xffdd00, front: 0xee1111, back: 0xff8800 },
+      // Pastel
+      { right: 0x6EC6F5, left: 0x77DD77, top: 0xFFFFFF, bottom: 0xFFDAB9, front: 0xFF9AA2, back: 0xB39DDB },
+      // Neon
+      { right: 0x00FFFF, left: 0x39FF14, top: 0xFFFFFF, bottom: 0xFFFF00, front: 0xFF073A, back: 0xFF6600 },
+    ];
+    let schemeIdx = 0;
+
     const ANIM_SPEED_SCRAMBLE = 0.08;
     const ANIM_SPEED_MANUAL   = 0.05;
     const ANIM_SPEED_SOLVE    = 0.05;
@@ -318,8 +328,7 @@
 
     function updateArrows() {
       const cur = cubeGroup.quaternion;
-      let bestDot = -1;
-      let bestFC  = null;
+      let bestDot = -1, bestFC = null;
       FACE_CONFIGS.forEach(fc => {
         const d = Math.abs(cur.dot(fc.targetQuat));
         if (d > bestDot) { bestDot = d; bestFC = fc; }
@@ -346,11 +355,9 @@
     function startMoveAnimation(move) {
       const { axis, layer, dir } = move;
       const layerCubies = getCubiesInLayer(axis, layer);
-
       const pivot = new THREE.Group();
       cubeGroup.add(pivot);
       layerCubies.forEach(c => pivot.attach(c.mesh));
-
       const startQuat = pivot.quaternion.clone();
       const endQuat   = new THREE.Quaternion();
       const axisVec   = new THREE.Vector3(
@@ -359,7 +366,6 @@
         axis === 'z' ? 1 : 0,
       );
       endQuat.setFromAxisAngle(axisVec, dir * Math.PI / 2);
-
       currentAnim = { pivot, startQuat, endQuat, progress: 0, cubies: layerCubies };
     }
 
@@ -367,7 +373,6 @@
       const { pivot, cubies: layerCubies } = currentAnim;
       pivot.quaternion.copy(currentAnim.endQuat);
       pivot.updateMatrixWorld();
-
       layerCubies.forEach(c => {
         cubeGroup.attach(c.mesh);
         const p = c.mesh.position;
@@ -723,10 +728,10 @@
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
         const hits = raycaster.intersectObjects(arrowMeshes);
-        const newHovered = hits.length > 0 ? hits[0].object : null;
-        if (newHovered !== hoveredArrow) {
+        const newHov = hits.length > 0 ? hits[0].object : null;
+        if (newHov !== hoveredArrow) {
           if (hoveredArrow) hoveredArrow.scale.setScalar(1.0);
-          hoveredArrow = newHovered;
+          hoveredArrow = newHov;
           if (hoveredArrow) hoveredArrow.scale.setScalar(1.18);
         }
       }
@@ -811,7 +816,6 @@
           currentAnim.pivot.quaternion,
           t,
         );
-
         if (currentAnim.progress >= 1.0) {
           finalizeMove();
           updateButtons();
