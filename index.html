@@ -35,33 +35,30 @@
     #dmBtn:hover:not(:disabled) { background: #9b59b6; }
     #dmBtn.active { background: #c0392b; }
     #dmBtn.active:hover:not(:disabled) { background: #e74c3c; }
-    #schemeControl {
+    #sizeControl {
       display: flex;
-      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
       background: #222;
       border-radius: 8px;
-      padding: 8px 10px;
-      align-items: center;
+      padding: 6px 10px;
     }
-    #schemeControl span {
-      color: #888;
-      font-size: 12px;
+    #sizeControl button {
+      padding: 6px 14px;
+      font-size: 18px;
+      background: #444;
+      color: #fff;
+      border-radius: 6px;
+    }
+    #sizeControl button:hover:not(:disabled) { background: #666; }
+    #sizeLabel {
+      color: #ddd;
+      font-size: 15px;
       font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      flex-shrink: 0;
+      min-width: 36px;
+      text-align: center;
     }
-    .swatch {
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
-      border: 3px solid transparent;
-      cursor: pointer;
-      padding: 0;
-      transition: border-color 0.2s, transform 0.15s;
-    }
-    .swatch:hover { transform: scale(1.12); }
-    .swatch.active { border-color: #fff; transform: scale(1.18); }
     #hint {
       position: fixed;
       bottom: 20px;
@@ -80,14 +77,10 @@
     <button id="scrambleBtn">Scramble</button>
     <button id="solveBtn">Solve</button>
     <button id="dmBtn">Take Apart</button>
-    <div id="schemeControl">
-      <span>Color</span>
-      <button class="swatch active" data-scheme="0" title="Classic"
-        style="background:linear-gradient(135deg,#1155ee 33%,#ee1111 33% 66%,#ffffff 66%)"></button>
-      <button class="swatch" data-scheme="1" title="Pastel"
-        style="background:linear-gradient(135deg,#6EC6F5 33%,#FF9AA2 33% 66%,#77DD77 66%)"></button>
-      <button class="swatch" data-scheme="2" title="Neon"
-        style="background:linear-gradient(135deg,#00FFFF 33%,#FF073A 33% 66%,#39FF14 66%)"></button>
+    <div id="sizeControl">
+      <button id="sizeMinusBtn">−</button>
+      <span id="sizeLabel">3×3</span>
+      <button id="sizePlusBtn">+</button>
     </div>
   </div>
   <div id="hint">Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers</div>
@@ -119,13 +112,9 @@
     const ANIM_SPEED_SOLVE    = 0.05;
     const CUBIE_SIZE      = 0.92;
     const CUBIE_GAP       = 1.0;
-    const SCRAMBLE_MOVES  = 20;
     const CLICK_THRESHOLD = 6;
-
-    // Disassemble mode constants
-    const DM_PULL_DIST  = 2.0;   // how far cubies float out on click
-    const DM_SNAP_DIST  = 0.85;  // snap-to-slot threshold during drag
-    const DM_ANIM_SPEED = 0.07;  // pull/push animation speed
+    const MIN_SIZE        = 2;
+    const MAX_SIZE        = 6;
 
     // 6 face configs: local normal/up/right for each cube face.
     const FACE_CONFIGS = [
@@ -164,47 +153,10 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // ── CUBE CONSTRUCTION ──────────────────────────────────────────────────────
-    const cubies = [];
-
-    function makeMaterials(ix, iy, iz) {
-      const s = COLOR_SCHEMES[schemeIdx];
-      return [
-        new THREE.MeshLambertMaterial({ color: ix ===  1 ? s.right  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: ix === -1 ? s.left   : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iy ===  1 ? s.top    : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iy === -1 ? s.bottom : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iz ===  1 ? s.front  : COLORS.BLACK }),
-        new THREE.MeshLambertMaterial({ color: iz === -1 ? s.back   : COLORS.BLACK }),
-      ];
-    }
-
-    function applyScheme() {
-      const s = COLOR_SCHEMES[schemeIdx];
-      cubies.forEach(c => {
-        c.mesh.material[0].color.setHex(c.hx ===  1 ? s.right  : COLORS.BLACK);
-        c.mesh.material[1].color.setHex(c.hx === -1 ? s.left   : COLORS.BLACK);
-        c.mesh.material[2].color.setHex(c.hy ===  1 ? s.top    : COLORS.BLACK);
-        c.mesh.material[3].color.setHex(c.hy === -1 ? s.bottom : COLORS.BLACK);
-        c.mesh.material[4].color.setHex(c.hz ===  1 ? s.front  : COLORS.BLACK);
-        c.mesh.material[5].color.setHex(c.hz === -1 ? s.back   : COLORS.BLACK);
-      });
-      document.querySelectorAll('.swatch').forEach((sw, i) => sw.classList.toggle('active', i === schemeIdx));
-    }
-
-    (function createCubies() {
-      const geo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
-      for (let ix = -1; ix <= 1; ix++)
-        for (let iy = -1; iy <= 1; iy++)
-          for (let iz = -1; iz <= 1; iz++) {
-            const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz));
-            mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
-            cubeGroup.add(mesh);
-            cubies.push({ mesh, hx: ix, hy: iy, hz: iz });
-          }
-    })();
-
     // ── SNAP TARGET QUATERNIONS ────────────────────────────────────────────────
+    // Precompute the cubeGroup quaternion that puts each face head-on to camera.
+    // Camera direction stays constant across sizes (only distance changes), so
+    // these only need to be computed once.
     (function computeSnapTargets() {
       const camDir = camera.position.clone().normalize();
       const worldUp = new THREE.Vector3(0, 1, 0);
@@ -218,34 +170,92 @@
       });
     })();
 
-    // ── ARROW CONTROLS ─────────────────────────────────────────────────────────
-    const arrowMeshes = [];
-    const arrowToMove = new Map();
-    const arrows = { top: [], bottom: [], left: [], right: [] };
+    // ── CUBE STATE ─────────────────────────────────────────────────────────────
+    let cubeSize = 3;
+    const cubies = [];
 
-    function makeArrowTexture(symbol) {
-      const c = document.createElement('canvas');
-      c.width = c.height = 128;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
-      ctx.beginPath();
-      ctx.arc(64, 64, 58, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.font = 'bold 80px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(symbol, 64, 70);
-      return new THREE.CanvasTexture(c);
+    // Returns the layer positions for an N-size cube: e.g. N=3 → [-1, 0, 1], N=4 → [-1.5, -0.5, 0.5, 1.5]
+    function getLayers(N) {
+      const offset = (N - 1) / 2;
+      return Array.from({ length: N }, (_, i) => -offset + i);
     }
 
-    (function createArrows() {
-      const geo = new THREE.PlaneGeometry(0.55, 0.55);
-      const symbols = { top: '\u25B2', bottom: '\u25BC', left: '\u25C4', right: '\u25BA' };
+    function makeMaterials(ix, iy, iz, N) {
+      const e = (N - 1) / 2;
+      return [
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix - e) < 0.1 ? COLORS.BLUE   : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(ix + e) < 0.1 ? COLORS.GREEN  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy - e) < 0.1 ? COLORS.WHITE  : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iy + e) < 0.1 ? COLORS.YELLOW : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz - e) < 0.1 ? COLORS.RED    : COLORS.BLACK }),
+        new THREE.MeshLambertMaterial({ color: Math.abs(iz + e) < 0.1 ? COLORS.ORANGE : COLORS.BLACK }),
+      ];
+    }
+
+    function buildCube(N) {
+      cubies.forEach(c => cubeGroup.remove(c.mesh));
+      cubies.length = 0;
+      const geo    = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
+      const layers = getLayers(N);
+      for (const ix of layers)
+        for (const iy of layers)
+          for (const iz of layers) {
+            const mesh = new THREE.Mesh(geo, makeMaterials(ix, iy, iz, N));
+            mesh.position.set(ix * CUBIE_GAP, iy * CUBIE_GAP, iz * CUBIE_GAP);
+            cubeGroup.add(mesh);
+            cubies.push({ mesh });
+          }
+    }
+
+    // ── ARROW CONTROLS ─────────────────────────────────────────────────────────
+    let arrowMeshes   = [];
+    let currentArrows = { top: [], bottom: [], left: [], right: [] };
+    const arrowToMove = new Map();
+
+    // Pre-render arrow textures once; reused across all sizes.
+    const arrowTextures = (() => {
+      function make(symbol) {
+        const c = document.createElement('canvas');
+        c.width = c.height = 128;
+        const ctx = c.getContext('2d');
+        // Dark backing circle — contrasts against both the black scene and
+        // any coloured cube face.
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.beginPath();
+        ctx.arc(64, 64, 58, 0, Math.PI * 2);
+        ctx.fill();
+        // Solid white arrow with a subtle dark shadow for extra pop.
+        ctx.shadowColor   = 'rgba(0,0,0,0.9)';
+        ctx.shadowBlur    = 8;
+        ctx.fillStyle     = '#00e5ff';
+        ctx.font          = 'bold 84px sans-serif';
+        ctx.textAlign     = 'center';
+        ctx.textBaseline  = 'middle';
+        ctx.fillText(symbol, 64, 70);
+        return new THREE.CanvasTexture(c);
+      }
+      return {
+        top:    make('\u25B2'),
+        bottom: make('\u25BC'),
+        left:   make('\u25C4'),
+        right:  make('\u25BA'),
+      };
+    })();
+
+    function rebuildArrows(N) {
+      arrowMeshes.forEach(m => cubeGroup.remove(m));
+      arrowMeshes   = [];
+      arrowToMove.clear();
+      currentArrows = { top: [], bottom: [], left: [], right: [] };
+
+      // Shrink arrow size for larger cubes so they don't crowd each other.
+      const arrowSize = Math.min(0.90, 0.55 * N / 3);
+      const geo = new THREE.PlaneGeometry(arrowSize, arrowSize);
+
       for (const edge of ['top', 'bottom', 'left', 'right']) {
-        for (let i = 0; i < 3; i++) {
-          const mat = new THREE.MeshBasicMaterial({
-            map: makeArrowTexture(symbols[edge]),
+        for (let i = 0; i < N; i++) {
+          const mat  = new THREE.MeshBasicMaterial({
+            map: arrowTextures[edge],
             transparent: true,
             side: THREE.DoubleSide,
             depthWrite: false,
@@ -253,45 +263,66 @@
           const mesh = new THREE.Mesh(geo, mat);
           mesh.visible = false;
           cubeGroup.add(mesh);
-          arrows[edge].push(mesh);
+          currentArrows[edge].push(mesh);
           arrowMeshes.push(mesh);
         }
       }
-    })();
+    }
 
     function positionArrows(fc) {
       const { normal, up, right } = fc;
       arrowToMove.clear();
+
       const arrowQuat = new THREE.Quaternion().setFromUnitVectors(
         new THREE.Vector3(0, 0, 1), normal
       );
+
       const rLetter = right.x !== 0 ? 'x' : right.y !== 0 ? 'y' : 'z';
       const rSign   = right[rLetter];
       const uLetter = up.x    !== 0 ? 'x' : up.y    !== 0 ? 'y' : 'z';
       const uSign   = up[uLetter];
-      const cols = [-1, 0, 1];
-      const rows = [ 1, 0,-1];
+
+      const layers    = getLayers(cubeSize);
+      // Distance from cube centre to the arrow row/column perimeter.
+      const perimDist = (cubeSize - 1) / 2 + 0.8;
+
       function place(mesh, pos, move) {
         mesh.position.copy(pos);
         mesh.quaternion.copy(arrowQuat);
         mesh.visible = true;
         arrowToMove.set(mesh, move);
       }
-      cols.forEach((c, i) => {
-        const pos = normal.clone().multiplyScalar(0.1).add(right.clone().multiplyScalar(c)).add(up.clone().multiplyScalar(1.8));
-        place(arrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
+
+      // Top ▲ — one per column, push column upward
+      layers.forEach((c, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(c))
+          .add(up.clone().multiplyScalar(perimDist));
+        place(currentArrows.top[i], pos, { axis: rLetter, layer: c * rSign, dir: -rSign });
       });
-      cols.forEach((c, i) => {
-        const pos = normal.clone().multiplyScalar(0.1).add(right.clone().multiplyScalar(c)).add(up.clone().multiplyScalar(-1.8));
-        place(arrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
+
+      // Bottom ▼ — one per column, push column downward
+      layers.forEach((c, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(c))
+          .add(up.clone().multiplyScalar(-perimDist));
+        place(currentArrows.bottom[i], pos, { axis: rLetter, layer: c * rSign, dir: rSign });
       });
-      rows.forEach((r, i) => {
-        const pos = normal.clone().multiplyScalar(0.1).add(right.clone().multiplyScalar(-1.8)).add(up.clone().multiplyScalar(r));
-        place(arrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
+
+      // Left ◄ — one per row, push row leftward (displayed top-to-bottom)
+      [...layers].reverse().forEach((r, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(-perimDist))
+          .add(up.clone().multiplyScalar(r));
+        place(currentArrows.left[i], pos, { axis: uLetter, layer: r * uSign, dir: -uSign });
       });
-      rows.forEach((r, i) => {
-        const pos = normal.clone().multiplyScalar(0.1).add(right.clone().multiplyScalar(1.8)).add(up.clone().multiplyScalar(r));
-        place(arrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
+
+      // Right ► — one per row, push row rightward
+      [...layers].reverse().forEach((r, i) => {
+        const pos = normal.clone().multiplyScalar(0.1)
+          .add(right.clone().multiplyScalar(perimDist))
+          .add(up.clone().multiplyScalar(r));
+        place(currentArrows.right[i], pos, { axis: uLetter, layer: r * uSign, dir: uSign });
       });
     }
 
@@ -311,8 +342,10 @@
     let   currentAnim = null;
     let   animSpeed   = ANIM_SPEED_SCRAMBLE;
 
+    // Tolerance-based layer lookup — handles both integer (odd N) and
+    // half-integer (even N) positions correctly.
     function getCubiesInLayer(axis, layer) {
-      return cubies.filter(c => Math.round(c.mesh.position[axis]) === layer);
+      return cubies.filter(c => Math.abs(c.mesh.position[axis] - layer) < 0.1);
     }
 
     function easeInOut(t) {
@@ -343,7 +376,13 @@
       layerCubies.forEach(c => {
         cubeGroup.attach(c.mesh);
         const p = c.mesh.position;
-        p.set(Math.round(p.x), Math.round(p.y), Math.round(p.z));
+        // Round to nearest 0.5 — works for both integer (odd N) and
+        // half-integer (even N) layer positions.
+        p.set(
+          Math.round(p.x * 2) / 2,
+          Math.round(p.y * 2) / 2,
+          Math.round(p.z * 2) / 2,
+        );
       });
       cubeGroup.remove(pivot);
       currentAnim = null;
@@ -362,15 +401,17 @@
     }
 
     // ── SCRAMBLE / SOLVE ───────────────────────────────────────────────────────
-    const AXES   = ['x', 'y', 'z'];
-    const LAYERS = [-1, 0, 1];
+    const AXES = ['x', 'y', 'z'];
 
-    function scramble(n) {
+    function scramble() {
+      const layers = getLayers(cubeSize);
+      // Scale move count with cube complexity.
+      const n = cubeSize * cubeSize * 2;
       animSpeed = ANIM_SPEED_SCRAMBLE;
       for (let i = 0; i < n; i++) {
         enqueueMove({
           axis:  AXES[Math.floor(Math.random() * 3)],
-          layer: LAYERS[Math.floor(Math.random() * 3)],
+          layer: layers[Math.floor(Math.random() * layers.length)],
           dir:   Math.random() < 0.5 ? 1 : -1,
         }, true);
       }
@@ -389,34 +430,25 @@
     }
 
     // ── DISASSEMBLE MODE ───────────────────────────────────────────────────────
+    const DM_SNAP_DIST  = 0.85;
+    const DM_ANIM_SPEED = 0.07;
+
     let disassembleMode = false;
-
-    // dmSlots[i] = { homePos: Vector3, occupant: cubie | null }
-    const dmSlots  = [];
+    const dmSlots  = [];   // { homePos, occupant }
     let   dmGhosts = [];   // node-point spheres, one per slot
+    const dmAnims  = [];   // { cubie, from, to, progress, onDone }
 
-    // Per-cubie fields set on enterDM: cubie.isFloating, cubie.slotIndex
-    // DM animation queue: { cubie, from, to, progress, onDone }
-    const dmAnims = [];
-
-    // Drag state
-    let dmDragCubie      = null;
-    let dmDragPlane      = null;
-    let dmDragLocalOff   = null;  // offset in cubeGroup local space
-    let dmPotentialGrab  = null;  // { cubie, worldHitPoint } set on pointerdown
-    let dmHoveredCubie   = null;
-    let dmSnapIdx        = -1;    // index of ghost currently highlighted
+    let dmDragCubie     = null;
+    let dmDragPlane     = null;
+    let dmDragLocalOff  = null;
+    let dmPotentialGrab = null;
+    let dmHoveredCubie  = null;
+    let dmSnapIdx       = -1;
 
     function dmAddAnim(cubie, toPos, onDone) {
       const existing = dmAnims.findIndex(a => a.cubie === cubie);
       if (existing >= 0) dmAnims.splice(existing, 1);
-      dmAnims.push({
-        cubie,
-        from: cubie.mesh.position.clone(),
-        to:   toPos.clone(),
-        progress: 0,
-        onDone: onDone || null,
-      });
+      dmAnims.push({ cubie, from: cubie.mesh.position.clone(), to: toPos.clone(), progress: 0, onDone: onDone || null });
     }
 
     function dmTickAnims() {
@@ -439,20 +471,8 @@
       });
     }
 
-    // Find nearest empty slot within DM_SNAP_DIST; returns index or null.
-    function dmNearestEmptySlot(localPos) {
-      let best = null, bestDist = DM_SNAP_DIST;
-      dmSlots.forEach((s, i) => {
-        if (s.occupant !== null) return;
-        const d = localPos.distanceTo(s.homePos);
-        if (d < bestDist) { bestDist = d; best = i; }
-      });
-      return best;
-    }
-
-    // Find nearest empty slot regardless of distance; returns index or null.
-    function dmAnyNearestEmptySlot(localPos) {
-      let best = null, bestDist = Infinity;
+    function dmNearestEmptySlot(localPos, maxDist) {
+      let best = null, bestDist = maxDist !== undefined ? maxDist : Infinity;
       dmSlots.forEach((s, i) => {
         if (s.occupant !== null) return;
         const d = localPos.distanceTo(s.homePos);
@@ -463,26 +483,21 @@
 
     function dmPullOut(cubie) {
       const si = cubie.slotIndex;
-      if (si >= 0) {
-        dmSlots[si].occupant = null;
-        dmGhosts[si].visible = true;
-      }
+      if (si >= 0) { dmSlots[si].occupant = null; dmGhosts[si].visible = true; }
       cubie.isFloating = true;
       cubie.slotIndex  = -1;
-
-      // Pull direction: radial from cube center (in local space)
       const homePos = si >= 0 ? dmSlots[si].homePos.clone() : cubie.mesh.position.clone();
       const outDir  = homePos.clone().normalize();
-      if (outDir.lengthSq() < 0.001) outDir.set(1, 1, 1).normalize(); // center cubie fallback
-      const target = homePos.clone().addScaledVector(outDir, DM_PULL_DIST);
-      dmAddAnim(cubie, target);
+      if (outDir.lengthSq() < 0.001) outDir.set(1, 1, 1).normalize();
+      const pullDist = (cubeSize - 1) / 2 + 2.5;
+      dmAddAnim(cubie, homePos.clone().addScaledVector(outDir, pullDist));
     }
 
     function dmPlaceCubie(cubie, slotIdx) {
-      const slot = dmSlots[slotIdx];
-      slot.occupant     = cubie;
-      cubie.slotIndex   = slotIdx;
-      cubie.isFloating  = false;
+      const slot     = dmSlots[slotIdx];
+      slot.occupant  = cubie;
+      cubie.slotIndex  = slotIdx;
+      cubie.isFloating = false;
       dmGhosts[slotIdx].visible = false;
       dmAddAnim(cubie, slot.homePos, () => { cubie.mesh.position.copy(slot.homePos); });
     }
@@ -490,8 +505,7 @@
     function dmHandleClick(cubie) {
       cubie.mesh.scale.setScalar(1);
       if (cubie.isFloating) {
-        // Snap to nearest available slot (unbounded — any click puts it back)
-        const si = dmAnyNearestEmptySlot(cubie.mesh.position);
+        const si = dmNearestEmptySlot(cubie.mesh.position);
         if (si !== null) dmPlaceCubie(cubie, si);
       } else {
         dmPullOut(cubie);
@@ -499,32 +513,24 @@
     }
 
     function dmStartDrag(cubie, worldHitPoint) {
-      // Cancel pending animation
       const ai = dmAnims.findIndex(a => a.cubie === cubie);
       if (ai >= 0) dmAnims.splice(ai, 1);
-
-      // Free from slot if still seated
       if (!cubie.isFloating) {
         const si = cubie.slotIndex;
         if (si >= 0) { dmSlots[si].occupant = null; dmGhosts[si].visible = true; }
         cubie.isFloating = true;
         cubie.slotIndex  = -1;
       }
-
       cubie.mesh.scale.setScalar(1);
       if (dmHoveredCubie === cubie) dmHoveredCubie = null;
-
-      // Build drag plane: at cubie world pos, normal = camera forward
       const worldPos = new THREE.Vector3();
       cubie.mesh.getWorldPosition(worldPos);
       const camDir = new THREE.Vector3();
       camera.getWorldDirection(camDir);
-      dmDragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, worldPos);
-
-      // Local-space offset so the cubie doesn't jump on grab
+      dmDragPlane    = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, worldPos);
       const localHit = cubeGroup.worldToLocal(worldHitPoint.clone());
-      dmDragLocalOff  = new THREE.Vector3().subVectors(localHit, cubie.mesh.position);
-      dmDragCubie     = cubie;
+      dmDragLocalOff = new THREE.Vector3().subVectors(localHit, cubie.mesh.position);
+      dmDragCubie    = cubie;
     }
 
     function dmUpdateDrag(clientX, clientY) {
@@ -533,13 +539,10 @@
       raycaster.setFromCamera(mouse, camera);
       const worldTarget = new THREE.Vector3();
       if (!raycaster.ray.intersectPlane(dmDragPlane, worldTarget)) return;
-
       const localTarget = cubeGroup.worldToLocal(worldTarget.clone());
       localTarget.sub(dmDragLocalOff);
       dmDragCubie.mesh.position.copy(localTarget);
-
-      // Snap highlight
-      const nearest = dmNearestEmptySlot(localTarget);
+      const nearest = dmNearestEmptySlot(localTarget, DM_SNAP_DIST);
       if (nearest !== dmSnapIdx) {
         if (dmSnapIdx >= 0) {
           dmGhosts[dmSnapIdx].material.color.setHex(0x00e5ff);
@@ -559,17 +562,13 @@
       if (!dmDragCubie) return;
       const cubie = dmDragCubie;
       dmDragCubie = null; dmDragPlane = null; dmDragLocalOff = null;
-
-      // Clear snap highlight
       if (dmSnapIdx >= 0 && dmSnapIdx < dmGhosts.length) {
         dmGhosts[dmSnapIdx].material.color.setHex(0x00e5ff);
         dmGhosts[dmSnapIdx].material.opacity = 0.85;
         dmGhosts[dmSnapIdx].scale.setScalar(1);
       }
       dmSnapIdx = -1;
-
-      // Snap to nearest empty slot if close enough
-      const si = dmNearestEmptySlot(cubie.mesh.position);
+      const si = dmNearestEmptySlot(cubie.mesh.position, DM_SNAP_DIST);
       if (si !== null) dmPlaceCubie(cubie, si);
     }
 
@@ -577,7 +576,7 @@
       mouse.x =  (clientX / window.innerWidth)  * 2 - 1;
       mouse.y = -(clientY / window.innerHeight) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects(cubies.map(c => c.mesh));
+      const hits   = raycaster.intersectObjects(cubies.map(c => c.mesh));
       const newHov = hits.length > 0 ? cubies.find(c => c.mesh === hits[0].object) : null;
       if (newHov !== dmHoveredCubie) {
         if (dmHoveredCubie) dmHoveredCubie.mesh.scale.setScalar(1);
@@ -589,16 +588,12 @@
     function enterDM() {
       disassembleMode = true;
       arrowMeshes.forEach(m => m.visible = false);
-
-      // Build slots from current cubie positions
       dmSlots.length = 0;
       cubies.forEach((c, i) => {
         c.isFloating = false;
         c.slotIndex  = i;
         dmSlots.push({ homePos: c.mesh.position.clone(), occupant: c });
       });
-
-      // Create node-point spheres (one per slot, hidden while occupied)
       const nodeGeo = new THREE.SphereGeometry(0.18, 10, 10);
       dmGhosts = [];
       dmSlots.forEach(slot => {
@@ -609,7 +604,6 @@
         cubeGroup.add(m);
         dmGhosts.push(m);
       });
-
       document.getElementById('hint').innerHTML =
         'Click a piece to pull it out &nbsp;|&nbsp; Drag to reposition &nbsp;|&nbsp; Drop near a slot to snap in &nbsp;|&nbsp; Drag empty space to orbit';
       document.getElementById('dmBtn').textContent = 'Put Together';
@@ -619,35 +613,44 @@
 
     function exitDM() {
       dmAnims.length = 0;
-
-      // Reset drag/hover state
       if (dmHoveredCubie) { dmHoveredCubie.mesh.scale.setScalar(1); dmHoveredCubie = null; }
       if (dmDragCubie)    { dmDragCubie = null; dmDragPlane = null; dmDragLocalOff = null; }
-      dmPotentialGrab = null;
-      dmSnapIdx = -1;
-
-      // Snap all floating cubies to nearest available slot
+      dmPotentialGrab = null; dmSnapIdx = -1;
       cubies.filter(c => c.isFloating).forEach(c => {
-        const si = dmAnyNearestEmptySlot(c.mesh.position);
-        if (si !== null) {
-          c.mesh.position.copy(dmSlots[si].homePos);
-          dmSlots[si].occupant = c;
-        }
-        c.isFloating = false;
-        c.slotIndex  = -1;
+        const si = dmNearestEmptySlot(c.mesh.position);
+        if (si !== null) { c.mesh.position.copy(dmSlots[si].homePos); dmSlots[si].occupant = c; }
+        c.isFloating = false; c.slotIndex = -1;
       });
-
-      // Remove ghosts
       dmGhosts.forEach(m => cubeGroup.remove(m));
-      dmGhosts  = [];
-      dmSlots.length = 0;
-
+      dmGhosts = []; dmSlots.length = 0;
       disassembleMode = false;
-      document.getElementById('hint').innerHTML =
-        'Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers';
+      document.getElementById('hint').innerHTML = 'Drag to orbit &nbsp;|&nbsp; Click arrows to rotate layers';
       document.getElementById('dmBtn').textContent = 'Take Apart';
       document.getElementById('dmBtn').classList.remove('active');
       updateArrows();
+      updateButtons();
+    }
+
+    // ── INIT CUBE ──────────────────────────────────────────────────────────────
+    function initCube(N) {
+      if (disassembleMode) exitDM();
+      cubeSize = N;
+      moveQueue.length   = 0;
+      moveHistory.length = 0;
+      currentAnim        = null;
+      cubeGroup.quaternion.identity();
+      if (hoveredArrow) { hoveredArrow.scale.setScalar(1.0); hoveredArrow = null; }
+
+      buildCube(N);
+      rebuildArrows(N);
+
+      // Scale camera distance with cube size, keeping the same view angle.
+      const d = 3.5 + N * 1.5;
+      camera.position.set(d * 4 / 7, d * 4 / 7, d);
+      camera.lookAt(0, 0, 0);
+
+      updateArrows();
+      updateSizeLabel();
       updateButtons();
     }
 
@@ -671,14 +674,9 @@
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, camera);
         const hits = raycaster.intersectObjects(cubies.map(c => c.mesh));
-        if (hits.length > 0) {
-          dmPotentialGrab = {
-            cubie:         cubies.find(c => c.mesh === hits[0].object),
-            worldHitPoint: hits[0].point.clone(),
-          };
-        } else {
-          dmPotentialGrab = null;
-        }
+        dmPotentialGrab = hits.length > 0
+          ? { cubie: cubies.find(c => c.mesh === hits[0].object), worldHitPoint: hits[0].point.clone() }
+          : null;
       }
     });
 
@@ -689,16 +687,11 @@
 
       if (disassembleMode) {
         if (dmDragCubie) {
-          // Dragging a cubie — move it, no orbit
           dmUpdateDrag(e.clientX, e.clientY);
         } else if (dmPotentialGrab && pointerStart) {
           const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
-          if (dist >= CLICK_THRESHOLD) {
-            dmStartDrag(dmPotentialGrab.cubie, dmPotentialGrab.worldHitPoint);
-            isDragging = true;
-          }
+          if (dist >= CLICK_THRESHOLD) { dmStartDrag(dmPotentialGrab.cubie, dmPotentialGrab.worldHitPoint); isDragging = true; }
         } else {
-          // No cubie grabbed — orbit normally
           if (pointerStart) {
             const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
             if (dist >= CLICK_THRESHOLD && !isDragging) isDragging = true;
@@ -709,13 +702,10 @@
             cubeGroup.quaternion.normalize();
           }
         }
-
-        // Hover highlight (only when idle)
         if (!dmDragCubie && !isDragging) {
           dmUpdateHover(e.clientX, e.clientY);
-        } else if ((dmDragCubie || isDragging) && dmHoveredCubie) {
-          dmHoveredCubie.mesh.scale.setScalar(1);
-          dmHoveredCubie = null;
+        } else if (dmHoveredCubie) {
+          dmHoveredCubie.mesh.scale.setScalar(1); dmHoveredCubie = null;
         }
         return;
       }
@@ -733,8 +723,6 @@
         cubeGroup.rotateOnWorldAxis(new THREE.Vector3(1, 0, 0), dy * ROT_SPEED);
         cubeGroup.quaternion.normalize();
       }
-
-      // Hover highlight on arrow planes
       if (!isDragging) {
         mouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
         mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -755,11 +743,8 @@
       pointerStart = null;
 
       if (disassembleMode) {
-        if (dmDragCubie) {
-          dmEndDrag();
-        } else if (!wasDrag && dmPotentialGrab) {
-          dmHandleClick(dmPotentialGrab.cubie);
-        }
+        if (dmDragCubie) { dmEndDrag(); }
+        else if (!wasDrag && dmPotentialGrab) { dmHandleClick(dmPotentialGrab.cubie); }
         dmPotentialGrab = null;
         return;
       }
@@ -792,29 +777,31 @@
     });
 
     // ── UI ─────────────────────────────────────────────────────────────────────
-    const scrambleBtn = document.getElementById('scrambleBtn');
-    const solveBtn    = document.getElementById('solveBtn');
-    const dmBtn       = document.getElementById('dmBtn');
+    const scrambleBtn  = document.getElementById('scrambleBtn');
+    const solveBtn     = document.getElementById('solveBtn');
+    const dmBtn        = document.getElementById('dmBtn');
+    const sizeMinusBtn = document.getElementById('sizeMinusBtn');
+    const sizePlusBtn  = document.getElementById('sizePlusBtn');
+    const sizeLabel    = document.getElementById('sizeLabel');
+
+    function updateSizeLabel() {
+      sizeLabel.textContent = `${cubeSize}\u00d7${cubeSize}`;
+    }
 
     function updateButtons() {
       const busy = currentAnim !== null || moveQueue.length > 0;
-      scrambleBtn.disabled = busy || disassembleMode;
-      solveBtn.disabled    = busy || moveHistory.length === 0 || disassembleMode;
-      dmBtn.disabled       = busy;
+      scrambleBtn.disabled  = busy || disassembleMode;
+      solveBtn.disabled     = busy || moveHistory.length === 0 || disassembleMode;
+      dmBtn.disabled        = busy;
+      sizeMinusBtn.disabled = busy || disassembleMode || cubeSize <= MIN_SIZE;
+      sizePlusBtn.disabled  = busy || disassembleMode || cubeSize >= MAX_SIZE;
     }
 
-    scrambleBtn.addEventListener('click', () => scramble(SCRAMBLE_MOVES));
+    scrambleBtn.addEventListener('click', scramble);
     solveBtn.addEventListener('click', solve);
-    dmBtn.addEventListener('click', () => {
-      if (disassembleMode) exitDM(); else enterDM();
-    });
-    document.querySelectorAll('.swatch').forEach(sw => {
-      sw.addEventListener('click', () => {
-        schemeIdx = parseInt(sw.dataset.scheme);
-        applyScheme();
-      });
-    });
-    updateButtons();
+    dmBtn.addEventListener('click', () => { if (disassembleMode) exitDM(); else enterDM(); });
+    sizeMinusBtn.addEventListener('click', () => { if (cubeSize > MIN_SIZE) initCube(cubeSize - 1); });
+    sizePlusBtn.addEventListener('click',  () => { if (cubeSize < MAX_SIZE) initCube(cubeSize + 1); });
 
     // ── MAIN LOOP ──────────────────────────────────────────────────────────────
     function tick() {
@@ -843,7 +830,7 @@
       renderer.render(scene, camera);
     }
 
-    updateArrows();
+    initCube(3);
     tick();
   })();
   </script>
